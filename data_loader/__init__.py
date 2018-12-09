@@ -1,1 +1,1 @@
-from .data_loaders import *
+from .mnist_data_loader import MnistDataLoader

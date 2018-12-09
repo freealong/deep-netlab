@@ -95,9 +95,7 @@ def draw_detections(image, detections, class_names=None):
 
     for i in range(N):
         color = colors[i]
-        alpha = 1
-        style = 'solid'
-
+        text_color = [1 - x for x in color]
         # bbox
         x1, y1, x2, y2, cls_index, cls_score = detections[i]
         draw_box(image, [x1, y1, x2, y2], color)
@@ -105,7 +103,7 @@ def draw_detections(image, detections, class_names=None):
         # bbox's caption
         class_name = str(int(cls_index)) if class_names is None else class_names[int(cls_index)]
         caption = '%s, %.3f' % (class_name, cls_score)
-        draw_text(image, caption, (x1, y1))
+        draw_text(image, caption, (x1, y1), fg_color=text_color, bg_color=color)
 
 
 if __name__ == "__main__":
