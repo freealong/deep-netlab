@@ -1,0 +1,57 @@
+{
+    "name": "SSD300",
+    "n_gpu": 1,
+
+    "arch": {
+        "type": "SSD",
+        "args": {
+            "num_classes": 21,
+            "image_dim": [300, 300],
+            "aspect_ratios": [[2], [2, 3], [2, 3], [2, 3], [2], [2]],
+            "feature_maps_dim": [[38, 38], [19, 19], [10, 10], [5, 5], [3, 3], [1, 1]],
+            "min_sizes": [30, 60, 111, 162, 213, 264],
+            "max_sizes": [60, 111, 162, 213, 264, 315]
+        }
+    },
+    "data_loader": {
+        "type": "MnistDataLoader",
+        "args":{
+            "data_dir": "data/",
+            "batch_size": 128,
+            "shuffle": true,
+            "validation_split": 0.1,
+            "num_workers": 2
+        }
+    },
+    "optimizer": {
+        "type": "Adam",
+        "args":{
+            "lr": 0.001,
+            "weight_decay": 0,
+            "amsgrad": true
+        }
+    },
+    "loss": "nll_loss",
+    "metrics": [
+        "my_metric", "my_metric2"
+    ],
+    "lr_scheduler": {
+        "type":"StepLR",
+        "args":{
+            "step_size":50,
+            "gamma":0.1
+        }
+    },
+    "trainer": {
+        "epochs": 1000,
+        "save_dir": "saved/",
+        "save_freq": 1,
+        "verbosity": 2,
+        "monitor": "val_loss",
+        "monitor_mode": "min"
+    },
+    "visualization":{
+        "tensorboardX": true,
+        "log_dir": "saved/runs"
+    }
+}
