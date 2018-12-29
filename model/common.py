@@ -70,9 +70,19 @@ def generate_prior_boxes_grid(box_sizes, grid_size, device=torch.device("cpu"), 
     cy.add_(0.5).div_(grid_size[0])
     cx = cx.repeat(prior_box_num, 1, 1).unsqueeze(3)
     cy = cy.repeat(prior_box_num, 1, 1).unsqueeze(3)
-    box_sizes = torch.tensor(box_sizes, device=device)
+    box_sizes = torch.tensor(box_sizes, device=device, dtype=torch.float32)
     box_sizes = box_sizes.repeat(grid_size[0], grid_size[1], 1, 1).permute(2, 0, 1, 3)
     grid = torch.cat([cx, cy, box_sizes], dim=3)
     if clip:
         grid.clamp_(0, 1)
     return grid
+
+def detection_layer(loc_data, conf_data, prior_data):
+    """
+
+    :param loc_data:
+    :param conf_data:
+    :param prior_data:
+    :return:
+    """
+    batch_size = loc_data.size(0)

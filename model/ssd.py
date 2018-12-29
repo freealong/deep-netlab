@@ -2,20 +2,25 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .common import *
+from model.common import *
 
 
 class SSD(nn.Module):
-    def __init__(self, num_classes, image_dim, aspect_ratios, feature_maps_dims, min_sizes, max_sizes, clip):
+    def __init__(self, phase, num_classes, image_shape, aspect_ratios, feature_maps_dims, min_sizes, max_sizes,
+                 clip=True):
         super(SSD, self).__init__()
+        self.phase = phase
         self.num_classes = num_classes
-        self.image_dim = image_dim
-        self.base = self.create_base()
+        self.image_dim = image_shape[:2]
+        self.image_channel = image_shape[2]
+        self.base = self.create_base(self.image_channel)
         self.extra = self.create_extra(self.base[-1].conv.out_channels)
         self.loc, self.conf = self.create_head(self.base, self.extra, num_classes)
         self.L2Norm = L2Norm(512, 20)
-        self.prior_boxes = self.create_prior_boxes(min_sizes, max_sizes, image_dim, aspect_ratios, feature_maps_dims,
-                                                   clip)
+        self.prior_boxes = self.create_prior_boxes(min_sizes, max_sizes, self.image_dim, aspect_ratios,
+                                                   feature_maps_dims, clip)
+        if self.phase == "test":
+            self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x):
         batch_size = x.shape[0]
@@ -37,8 +42,9 @@ class SSD(nn.Module):
                 detection_sources.append(x)
         # forward head to detection_sources
         for s, l, c in zip(detection_sources, self.loc, self.conf):
-            loc.append(l(s).permute(0, 2, 3, 1).view(batch_size, -1, 4))
-            conf.append(c(s).permute(0, 2, 3, 1).view(batch_size, -1, self.num_classes))
+            t = l(s)
+            loc.append(l(s).permute(0, 2, 3, 1).contiguous().view(batch_size, -1, 4))
+            conf.append(c(s).permute(0, 2, 3, 1).contiguous().view(batch_size, -1, self.num_classes))
         loc = torch.cat(loc, 1)
         conf = torch.cat(conf, 1)
         if self.prior_boxes.device != x.device:
@@ -97,11 +103,11 @@ class SSD(nn.Module):
 
     @staticmethod
     def create_prior_boxes(min_sizes, max_sizes, image_dim, aspect_ratios, feature_maps_dims, clip):
-        min_sizes = np.array(min_sizes)
-        max_sizes = np.array(max_sizes)
+        min_sizes = np.array([[s, s] for s in min_sizes])
+        max_sizes = np.array([[s, s] for s in max_sizes])
         image_dim = np.array(image_dim)
-        min_sizes /= image_dim
-        max_sizes /= image_dim
+        min_sizes = min_sizes / image_dim
+        max_sizes =  max_sizes / image_dim
         prior_boxes = []
         for k, v in enumerate(feature_maps_dims):
             box_sizes = vary_boxes_by_aspect_ratios(min_sizes[k], max_sizes[k], aspect_ratios[k])
@@ -127,3 +133,22 @@ class L2Norm(nn.Module):
         x = torch.div(x,norm)
         out = self.weight.unsqueeze(0).unsqueeze(2).unsqueeze(3).expand_as(x) * x
         return out
+
+
+if __name__ == "__main__":
+    num_classes = 21
+    image_shape = [300, 300, 3]
+    aspect_ratios = [[2], [2, 3], [2, 3], [2, 3], [2], [2]]
+    feature_maps_dim = [[38, 38], [19, 19], [10, 10], [5, 5], [3, 3], [1, 1]]
+    min_sizes = [30, 60, 111, 162, 213, 264]
+    max_sizes = [60, 111, 162, 213, 264, 315]
+    model = SSD(num_classes, image_shape, aspect_ratios, feature_maps_dim, min_sizes, max_sizes)
+    if torch.cuda.is_available():
+        model = model.cuda()
+
+    input = torch.randn([1, 3, 300, 300])
+    if torch.cuda.is_available():
+        input = input.cuda()
+    output = model.forward(input)
+
+    print(output)
