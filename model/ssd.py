@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import torch
 import torch.nn as nn
@@ -6,23 +7,31 @@ from model.common import *
 
 
 class SSD(nn.Module):
-    def __init__(self, phase, num_classes, image_shape, aspect_ratios, feature_maps_dims, min_sizes, max_sizes,
-                 clip=True):
+    def __init__(self, phase, params_cfg):
         super(SSD, self).__init__()
+        # load params
         self.phase = phase
-        self.num_classes = num_classes
-        self.image_dim = image_shape[:2]
-        self.image_channel = image_shape[2]
-        self.base = self.create_base(self.image_channel)
+        with open(params_cfg) as f:
+            self.cfg = json.loads(f.read())
+        self.num_classes = self.cfg['num_classes']
+        self.image_dim = self.cfg['image_dim']
+        self.aspect_ratios = self.cfg['aspect_ratios']
+        self.feature_maps_dims = self.cfg['feature_maps_dim']
+        self.min_sizes = self.cfg['min_sizes']
+        self.max_sizes = self.cfg['max_sizes']
+        self.variance = self.cfg['variance']
+        self.clip = self.cfg['clip']
+        # create net
+        self.base = self.create_base(self.image_dim[-1])
         self.extra = self.create_extra(self.base[-1].conv.out_channels)
-        self.loc, self.conf = self.create_head(self.base, self.extra, num_classes)
+        self.loc, self.conf = self.create_head(self.base, self.extra, self.num_classes)
         self.L2Norm = L2Norm(512, 20)
-        self.prior_boxes = self.create_prior_boxes(min_sizes, max_sizes, self.image_dim, aspect_ratios,
-                                                   feature_maps_dims, clip)
+        self.prior_boxes = self.create_prior_boxes(self.min_sizes, self.max_sizes, self.image_dim[:2],
+                                                   self.aspect_ratios, self.feature_maps_dims, self.clip)
         if self.phase == "test":
             self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x):
+    def forward(self, x, conf_thresh=0.5, nms_thresh=0.5):
         batch_size = x.shape[0]
         detection_sources = list()
         loc = list()
@@ -52,7 +61,12 @@ class SSD(nn.Module):
         # loc shape: batch_size * all_feature_size * 4
         # conf shape: batch_size * all_feature_size * num_classes
         # prior_boxes shape: all_feature_size * 4
-        return loc, conf, self.prior_boxes
+        if self.phase == "test":
+            conf = self.softmax(conf)
+            output = generate_detections(loc, conf, self.prior_boxes, self.variance, conf_thresh, nms_thresh)
+        else:
+            output = (loc, conf, self.prior_boxes)
+        return output
 
     @staticmethod
     def create_base(in_channels=3, batch_norm=False):
@@ -136,19 +150,49 @@ class L2Norm(nn.Module):
 
 
 if __name__ == "__main__":
-    num_classes = 21
-    image_shape = [300, 300, 3]
-    aspect_ratios = [[2], [2, 3], [2, 3], [2, 3], [2], [2]]
-    feature_maps_dim = [[38, 38], [19, 19], [10, 10], [5, 5], [3, 3], [1, 1]]
-    min_sizes = [30, 60, 111, 162, 213, 264]
-    max_sizes = [60, 111, 162, 213, 264, 315]
-    model = SSD(num_classes, image_shape, aspect_ratios, feature_maps_dim, min_sizes, max_sizes)
-    if torch.cuda.is_available():
-        model = model.cuda()
+    from PIL import Image
+    from utils.visualization import *
+    from torchvision import transforms
+    import cv2
 
-    input = torch.randn([1, 3, 300, 300])
+    cfg_file = "../config/ssd300.json"
+    img_file = "../images/dog-cycle-car.png"
+    weights_file = "../weights.pth"
+
+    # prepare model
+    model = SSD('test', cfg_file)
+    weights = torch.load(weights_file)
+    model.load_state_dict(weights)
+
+
+    # prepare input
+    trans = transforms.Compose([
+        transforms.Resize([300, 300]),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0., 0., 0.))
+        ])
+    # img = Image.open(img_file)
+    # input = trans(img)
+    img = cv2.imread(img_file)
+    x = cv2.resize(img, (300, 300)).astype(np.float32)
+    x -= (104., 117., 123.)
+    x = x.astype(np.float32)
+    x = x[:, :, ::-1].copy()
+    x = torch.from_numpy(x).permute(2, 0, 1)
+    input = x.unsqueeze(0)
+
     if torch.cuda.is_available():
         input = input.cuda()
-    output = model.forward(input)
+        model = model.cuda()
+    output = model.forward(input, 0.6)[0]
 
     print(output)
+    output[:, 0] *= 602
+    output[:, 1] *= 452
+    output[:, 2] *= 602
+    output[:, 3] *= 452
+
+    draw_detections(img, output)
+    cv2.imshow("im", img)
+    cv2.waitKey()
+

@@ -3,6 +3,8 @@ from collections import OrderedDict
 import torch
 import torch.nn as nn
 
+from utils import *
+
 
 def make_conv_bn_relu_layers(in_channels, out_channels, kernel_size, stride=1,
                         padding=0, dilation=1, batch_norm=True, relu=True):
@@ -41,10 +43,10 @@ def vgg_make_layers(cfg, in_channels, batch_norm=False):
 def vary_boxes_by_aspect_ratios(box, next_box, aspect_ratios):
     """
     generate prior boxes by different aspect ratios from ssd
-    :param box: [x, y]
-    :param next_box: [x, y]
+    :param box: [w, h]
+    :param next_box: [w, h]
     :param aspect_ratios: eg: [2, 3]
-    :return: [[x, y], ...]
+    :return: [[w, h], ...]
     """
     prior_boxes = []
     prior_boxes.append(box)
@@ -59,30 +61,78 @@ def vary_boxes_by_aspect_ratios(box, next_box, aspect_ratios):
 def generate_prior_boxes_grid(box_sizes, grid_size, device=torch.device("cpu"), clip=True):
     """
     :param box_sizes: a list of prior box size, eg: [[0.1, 0.1], [0.2, 0.2]]
-    :param grid_size: feature map size, [x, y]
+    :param grid_size: feature map size, [h, w]
     :param device: torch device
-    :return: tensor with shape: [prior box num, grid_x, grid_y, 4]
+    :return: tensor with shape: [grid_h, grid_w, prior box num, 4]
     """
-    prior_box_num = len(box_sizes)
-    cx, cy = torch.meshgrid([torch.arange(grid_size[0], dtype=torch.float32, device=device),
+    cy, cx = torch.meshgrid([torch.arange(grid_size[0], dtype=torch.float32, device=device),
                              torch.arange(grid_size[1], dtype=torch.float32, device=device)])
-    cx.add_(0.5).div_(grid_size[0])
-    cy.add_(0.5).div_(grid_size[0])
-    cx = cx.repeat(prior_box_num, 1, 1).unsqueeze(3)
-    cy = cy.repeat(prior_box_num, 1, 1).unsqueeze(3)
-    box_sizes = torch.tensor(box_sizes, device=device, dtype=torch.float32)
-    box_sizes = box_sizes.repeat(grid_size[0], grid_size[1], 1, 1).permute(2, 0, 1, 3)
-    grid = torch.cat([cx, cy, box_sizes], dim=3)
+    cy = cy.add(0.5).div(grid_size[0])
+    cx = cx.add(0.5).div(grid_size[1])
+    cy = cy.unsqueeze(2)
+    cx = cx.unsqueeze(2)
+    grids = []
+    for box_size in box_sizes:
+        box_size = torch.tensor(box_size, device=device, dtype=torch.float32)
+        box_size = box_size.repeat(grid_size[0], grid_size[1], 1)
+        grid = torch.cat([cx, cy, box_size], dim=2)
+        grids.append(grid)
+    grids = torch.cat(grids, dim=2).view(grid_size[0], grid_size[1], -1, 4)
     if clip:
-        grid.clamp_(0, 1)
-    return grid
+        grids.clamp_(0, 1)
+    return grids
 
-def detection_layer(loc_data, conf_data, prior_data):
+
+def decode_boxes(loc, priors, variances):
     """
+    decode locations from predictions using priors to undo the encoding we did for offset
+    regression at training time, see https://github.com/rykov8/ssd_keras/issues/53 for more about variance
+    :param loc: tensor, shape: [num_priors, 4]
+    :param priors: tensor, shape: [num_priors, 4]
+    :param variances: list[float], shape: 2
+    :return:
+    """
+    boxes = torch.cat([priors[:, :2] + variances[0] * loc[:, :2] * priors[:, 2:],
+                       priors[:, 2:] * torch.exp(variances[1] * loc[:, 2:])], dim=1)
+    boxes[:, :2] -= boxes[:, 2:] / 2
+    boxes[:, 2:] += boxes[:, :2]
+    return boxes
 
-    :param loc_data:
-    :param conf_data:
-    :param prior_data:
+
+def generate_detections(loc_data, conf_data, prior_data, variance, confidence, iou_threshold=0.5):
+    """
+    generate detections([y1, x1, y2, x2, cls, score]) from predictions
+    :param loc_data: tensor, shape: [batch_size, num_priors, 4]
+    :param conf_data: tensor, shape: [batch_size, num_priors, num_classes]
+    :param prior_data: tensor shape: [num_priors, 4]
     :return:
     """
     batch_size = loc_data.size(0)
+
+    detections = [torch.tensor([], dtype=loc_data.dtype, device=loc_data.device) for _ in range(batch_size)]
+    for i in range(batch_size):
+        # transform bbox into x1, y1, x2, y2
+        decoded_boxes = decode_boxes(loc_data[i], prior_data, variance)
+        # transform num of class scores into class index, and class score
+        cls_score, cls_index = torch.max(conf_data[i], 1)
+        cls_score = cls_score.unsqueeze(1)
+        cls_index = cls_index.unsqueeze(1).float()
+        detection = torch.cat([decoded_boxes, cls_index, cls_score], dim=1)
+        # filter by confidence
+        detection = detection[detection[:, 5] > confidence, :]
+        if detection.shape[0] == 0:
+            detections[i] = detection
+            continue
+        # get classes detected in the image
+        img_classes = torch.unique(detection[:, 4])
+        # do nms for each class
+        for cls in img_classes:
+            if cls == 0:
+                continue
+            detection_cls = detection[detection[:, 4] == cls, :]
+            detection_filtered = run_nums(detection_cls, 5, iou_threshold)
+            if detections[i].size(0) == 0:
+                detections[i] = detection_filtered
+            else:
+                detections[i] = torch.cat([detections[i], detection_filtered])
+    return detections
