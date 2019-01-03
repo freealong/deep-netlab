@@ -168,8 +168,8 @@ if __name__ == "__main__":
     # prepare input
     trans = transforms.Compose([
         transforms.Resize([300, 300]),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0., 0., 0.))
+        transforms.Normalize((0.5, 0.5, 0.5), (1., 1., 1.)),
+        transforms.ToTensor()
         ])
     # img = Image.open(img_file)
     # input = trans(img)
