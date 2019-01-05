@@ -8,6 +8,11 @@ def ensure_dir(path):
         os.makedirs(path)
 
 
+def format_bbox(bboxes):
+    return torch.cat((bboxes[:, :2] - bboxes[:, 2:] / 2,     # xmin, ymin
+                     bboxes[:, :2] + bboxes[:, 2:] / 2), 1)  # xmax, ymax
+
+
 def calculate_bbox_iou(bbox, bbox_list):
     '''
     calculate iou between a bbox and a list of bbox

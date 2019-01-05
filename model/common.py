@@ -83,6 +83,20 @@ def generate_prior_boxes_grid(box_sizes, grid_size, device=torch.device("cpu"), 
     return grids
 
 
+def encode_boxes(gt, priors, variances):
+    """
+    encode locations from predictions using priors to undo the encoding we did for offset
+    regression at training time, see https://github.com/rykov8/ssd_keras/issues/53 for more about variance
+    :param gt: tensor, shape: [num_priors, 4], [x1, y1, x2, y2]
+    :param priors: tensor, shape: [num_priors, 4], [cx, cy, w, h]
+    :param variances: list[float], shape: 2
+    :return:
+    """
+    ghat_cxcy = ((gt[:, :2] + gt[:, 2:]) / 2 - priors[:, :2]) / (variances[0] * priors[:, 2:])
+    ghat_wh = torch.log((gt[:, 2:] - gt[:, :2]) / priors[:, 2:]) / variances[1]
+    return torch.cat([ghat_cxcy, ghat_wh], 1)
+
+
 def decode_boxes(loc, priors, variances):
     """
     decode locations from predictions using priors to undo the encoding we did for offset
@@ -97,6 +111,40 @@ def decode_boxes(loc, priors, variances):
     boxes[:, :2] -= boxes[:, 2:] / 2
     boxes[:, 2:] += boxes[:, :2]
     return boxes
+
+
+def transform_truths(truths, priors, num_classes, variance, threshold=0.5):
+    """
+    transform ground truth to loc_gt, conf_gt
+    :param truths: shape: [batch_size, num_objects, 5]
+    :param priors: [num_priors, 4]
+    :param variance:
+    :param threshold:
+    :return: loc_gt: shape: [batch_size, num_priors, 4],
+             conf_gt
+             matched_masks: shape: [batch_size, num_priors]
+    """
+    batch_size = len(truths)
+    num_priors = priors.size(0)
+    loc_gt = torch.zeros(batch_size, num_priors, 4, device=priors.device, dtype=priors.dtype)
+    conf_gt = torch.zeros(batch_size, num_priors, num_classes, device=priors.device, dtype=priors.dtype)
+    conf_gt[:, 0] = 1 # set one-hot conf at index 0 to 1(background)
+    matched_masks = []
+    for i in range(batch_size):
+        box_gt = truths[i][:, :4]
+        cls_gt = truths[i][:, 4].long()
+        overlaps = compute_overlaps(box_gt, format_bbox(priors))
+        best_truth_overlap, best_truth_idx = overlaps.max(dim=0)
+        best_prior_idx = overlaps.argmax(dim=1)
+        best_truth_idx[best_truth_overlap <= threshold] = -1
+        best_truth_idx[best_prior_idx] = torch.arange(len(box_gt), dtype=best_truth_idx.dtype,
+                                                      device=best_truth_idx.device)
+        matched_mask = best_truth_idx > -1
+        matched_value = best_truth_idx[matched_mask]
+        conf_gt[i, matched_mask, cls_gt[matched_value]] = 1
+        loc_gt[i, matched_mask] = encode_boxes(box_gt[matched_value], priors[matched_mask], variance)
+        matched_masks.append(matched_mask)
+    return loc_gt, conf_gt, torch.cat(matched_masks)
 
 
 def generate_detections(loc_data, conf_data, prior_data, variance, confidence, iou_threshold=0.5):

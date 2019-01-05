@@ -160,7 +160,7 @@ if __name__ == "__main__":
     weights_file = "../weights.pth"
 
     # prepare model
-    model = SSD('test', cfg_file)
+    model = SSD('train', cfg_file)
     weights = torch.load(weights_file)
     model.load_state_dict(weights)
 
@@ -184,7 +184,11 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         input = input.cuda()
         model = model.cuda()
-    output = model.forward(input, 0.6)[0]
+    output = model.forward(input, 0.6)
+    transform_truths([torch.tensor([[0.1, 0.1, 0.2, 0.2, 1],
+                                             [0.15, 0.1, 0.22, 0.24, 9],
+                                             [0.5, 0.3, 0.6, 0.5, 2]]).cuda()], output[2], 21, model.variance, 0.5)
+
 
     print(output)
     output[:, 0] *= 602

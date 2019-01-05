@@ -156,7 +156,7 @@ from base import BaseDataLoader
 
 def voc_collate(batch):
    images = [sample[0] for sample in batch]
-   labels = [sample[1] for sample in batch]
+   labels = [torch.tensor(sample[1]) for sample in batch]
    return torch.stack(images, 0), labels
 
 
