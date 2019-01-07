@@ -1,4 +1,4 @@
-import json
+import json5
 import numpy as np
 import torch
 import torch.nn as nn
@@ -12,8 +12,7 @@ class SSD(BaseModel):
         super(SSD, self).__init__()
         # load params
         self.phase = phase
-        with open(params_cfg) as f:
-            self.cfg = json.loads(f.read())
+        self.cfg = json5.load(open(params_cfg))
         self.num_classes = self.cfg['num_classes']
         self.image_dim = self.cfg['image_dim']
         self.aspect_ratios = self.cfg['aspect_ratios']
@@ -22,6 +21,8 @@ class SSD(BaseModel):
         self.max_sizes = self.cfg['max_sizes']
         self.variance = self.cfg['variance']
         self.clip = self.cfg['clip']
+        self.conf_thresh = self.cfg['conf_thresh']
+        self.nms_thresh = self.cfg['nms_thresh']
         # create net
         self.base = self.create_base(self.image_dim[-1])
         self.extra = self.create_extra(self.base[-1].conv.out_channels)
@@ -29,15 +30,14 @@ class SSD(BaseModel):
         self.L2Norm = L2Norm(512, 20)
         self.prior_boxes = self.create_prior_boxes(self.min_sizes, self.max_sizes, self.image_dim[:2],
                                                    self.aspect_ratios, self.feature_maps_dims, self.clip)
-        if self.phase == "test":
-            self.softmax = nn.Softmax(dim=-1)
-        else:
+        self.softmax = nn.Softmax(dim=-1)
+        if self.phase != "test":
             self.match_thresh = self.cfg['match_thresh']
             self.negpos_ratio = self.cfg['negpos_ratio']
             self.loc_loss = nn.SmoothL1Loss(reduction='sum')
             self.conf_loss = nn.CrossEntropyLoss(reduction='none')
 
-    def forward(self, x, conf_thresh=0.5, nms_thresh=0.5):
+    def forward(self, x, conf_thresh=None, nms_thresh=None):
         batch_size = x.shape[0]
         detection_sources = list()
         loc = list()
@@ -69,6 +69,8 @@ class SSD(BaseModel):
         # prior_boxes shape: all_feature_size * 4
         if self.phase == "test":
             conf = self.softmax(conf)
+            conf_thresh = self.conf_thresh if conf_thresh is None else conf_thresh
+            nms_thresh = self.nms_thresh if nms_thresh is None else nms_thresh
             output = generate_detections(loc, conf, self.prior_boxes, self.variance, conf_thresh, nms_thresh)
         else:
             output = (loc, conf, self.prior_boxes)
@@ -101,6 +103,25 @@ class SSD(BaseModel):
         conf_loss = pos_conf_loss.sum() + selected_neg_conf_loss.sum()
         return (loc_loss + conf_loss) / num_pos
 
+    def detection_metric(self, output, target):
+        if self.phase != "test":
+            loc, conf, prior = output
+            conf = self.softmax(conf)
+            output = generate_detections(loc, conf, prior, self.variance, self.conf_thresh, self.nms_thresh)
+        batch_size = len(target)
+        metric_avg = None
+        valid_target = 0
+        for i in range(batch_size):
+            if len(target[i]) == 0:
+                continue
+            metric = compute_detection_metrics(output[i], target[i])
+            if metric_avg is None:
+                metric_avg = list(metric)
+            else:
+                metric_avg[1] += metric[1]
+            valid_target += 1
+        metric_avg[1] /= valid_target
+        return metric_avg
 
     @staticmethod
     def create_base(in_channels=3, batch_norm=False):

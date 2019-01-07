@@ -20,6 +20,18 @@
             "image_sets": ["2007-trainval", "2012-trainval"]
         }
     },
+    // if valid_data_loader is defined, we will use the config to build a valid_data_loader,
+    // or we will build a valid_data_loader split from data_loader by its validation_split value
+    "valid_data_loader": {
+        "type": "VOCDataLoader",
+        "args":{
+            "data_dir": "/mnt/datasets/voc/VOCdevkit",
+            "batch_size": 16,
+            "shuffle": false,
+            "num_workers": 2,
+            "image_sets": ["2007-test"]
+        }
+    },
     "optimizer": {
         "type": "SGD",
         "args":{
@@ -29,19 +41,21 @@
         }
     },
     "loss": "multibox_loss",
-    "metrics": [
+    "metrics": ["detection_metric"
     ],
     "lr_scheduler": {
         "type":"MultiStepLR",
         "args":{
-            "milestones": [80, 100, 120],
+            "milestones": [80, 100, 120], // epoch
             "gamma":0.1
         }
     },
     "trainer": {
+        "pretrained": "data/vgg16_reducedfc.pth", // optional
         "epochs": 120,
         "save_dir": "saved/",
         "save_freq": 10,
+        "validate_freq": 10,
         "verbosity": 2,
         "monitor": "val_loss",
         "monitor_mode": "min"

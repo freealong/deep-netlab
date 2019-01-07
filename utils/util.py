@@ -39,7 +39,7 @@ def compute_overlaps(boxes1, boxes2):
     :param boxes2: [[x1, y1, x2, y2], [x1, y1, x2, y2], ...], shape: M*4
     :return: shape: N*M
     """
-    overlaps = torch.zeros([boxes1.shape[0], boxes2.shape[0]])
+    overlaps = torch.zeros([boxes1.shape[0], boxes2.shape[0]], device=boxes2.device)
     for i in range(boxes1.shape[0]):
         box1 = boxes1[i]
         overlaps[i, :] = calculate_bbox_iou(box1, boxes2)
@@ -66,9 +66,7 @@ def run_nums(detections, sort_index, thresh):
     return detections
 
 
-def compute_detection_metrics(pred_boxes, pred_class_ids,
-                              gt_boxes, gt_class_ids,
-                              iou_threshold=0.5):
+def compute_detection_metrics(pred, gt, iou_threshold=0.5):
     """Compute Average Precision at a set IoU threshold (default 0.5).
     Returns:
     mAP: Mean Average Precision
@@ -76,10 +74,11 @@ def compute_detection_metrics(pred_boxes, pred_class_ids,
     recalls: List of recall values at different class score thresholds.
     overlaps: [pred_boxes, gt_boxes] IoU overlaps.
     """
-    assert len(pred_boxes) == len(pred_class_ids)
-    assert len(gt_boxes) == len(gt_class_ids)
-    if len(pred_boxes) == 0:
-        return {'precision': 0., 'recall': 0}
+    assert len(gt) > 0
+    if len(pred) == 0:
+        return ['precision', 'recall'], np.array([0., 0.])
+    pred_boxes, pred_class_ids = pred[:, :4], pred[:, 4]
+    gt_boxes, gt_class_ids = gt[:, :4], gt[:, 4]
     # Compute IoU overlaps [pred_boxes, gt_boxes]
     overlaps = compute_overlaps(pred_boxes, gt_boxes)
     correct_ids = pred_class_ids.view(overlaps.shape[0], -1).expand(overlaps.shape) ==\
@@ -87,13 +86,11 @@ def compute_detection_metrics(pred_boxes, pred_class_ids,
     tp = ((overlaps > iou_threshold) & correct_ids).sum().to(torch.float)
     precision = tp / len(pred_boxes)
     recall = tp / len(gt_boxes)
-    return {'precision': precision, 'recall': recall}
+    return ['precision', 'recall'], np.array([precision.item(), recall.item()])
 
 
 if __name__ == "__main__":
-    pred_boxes = torch.tensor([[100, 50, 200, 150], [50, 100, 100, 200]])
-    pred_class_ids = torch.tensor([0, 1])
-    gt_boxes = torch.tensor([[98, 50, 200, 150], [55, 100, 100, 200]])
-    gt_class_ids = torch.tensor([0, 1])
-    metrics = compute_detection_metrics(pred_boxes, pred_class_ids, gt_boxes, gt_class_ids)
+    pred = torch.tensor([[100, 50, 200, 150, 0], [50, 100, 100, 200, 1]])
+    gt = torch.tensor([[98, 50, 200, 150, 0], [55, 100, 100, 200, 1]])
+    metrics = compute_detection_metrics(pred, gt)
     print(metrics)

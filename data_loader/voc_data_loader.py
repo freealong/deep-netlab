@@ -162,7 +162,7 @@ def voc_collate(batch):
 
 class VOCDataLoader(BaseDataLoader):
 
-    def __init__(self, data_dir, batch_size, shuffle, validation_split, num_workers, image_sets):
+    def __init__(self, data_dir, batch_size, shuffle, num_workers, image_sets, validation_split=0):
         trsfm = transforms.Compose([
             transforms.Resize((300, 300)),
             transforms.ToTensor(),
@@ -172,5 +172,5 @@ class VOCDataLoader(BaseDataLoader):
         self.data_dir = data_dir
         self.dataset = VOCDetection(self.data_dir, image_sets=image_sets, transform=trsfm,
                                     target_transform=target_trsfm)
-        super(VOCDataLoader, self).__init__(self.dataset, batch_size, shuffle, validation_split, num_workers,
+        super(VOCDataLoader, self).__init__(self.dataset, batch_size, shuffle, num_workers, validation_split,
                                             collate_fn=voc_collate)

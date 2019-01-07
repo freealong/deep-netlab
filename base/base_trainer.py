@@ -14,7 +14,6 @@ class BaseTrainer:
     """
     def __init__(self, model, loss, metrics, optimizer, resume, config, train_logger=None):
         self.config = config
-        self.logger = logging.getLogger(self.__class__.__name__)
 
         # setup GPU device if available, move model into configured device
         self.device, device_ids = self._prepare_device(config['n_gpu'])
@@ -28,6 +27,7 @@ class BaseTrainer:
 
         self.epochs = config['trainer']['epochs']
         self.save_freq = config['trainer']['save_freq']
+        self.validate_freq = config['trainer']['validate_freq']
         self.verbosity = config['trainer']['verbosity']
 
         self.train_logger = train_logger
@@ -42,19 +42,31 @@ class BaseTrainer:
         # setup directory for checkpoint saving
         start_time = datetime.datetime.now().strftime('%m%d_%H%M%S')
         self.checkpoint_dir = os.path.join(config['trainer']['save_dir'], config['name'], start_time)
+        ensure_dir(self.checkpoint_dir)
+
+        # setup logger
+        self.logger = logging.getLogger(self.__class__.__name__)
+        file_handler = logging.FileHandler(os.path.join(self.checkpoint_dir, 'train.log'))
+        self.logger.addHandler(file_handler)
+
+        # Save configuration file into checkpoint directory:
+        config_save_path = os.path.join(self.checkpoint_dir, 'config.json')
+        with open(config_save_path, 'w') as handle:
+            json.dump(config, handle, indent=4, sort_keys=False)
+        self.logger.info("save checkpoint and training log in {}".format(self.checkpoint_dir))
+
         # setup visualization writer instance
         writer_dir = os.path.join(config['visualization']['log_dir'], config['name'], start_time)
         self.writer = WriterTensorboardX(writer_dir, self.logger, config['visualization']['tensorboardX'])
 
-        # Save configuration file into checkpoint directory:
-        ensure_dir(self.checkpoint_dir)
-        config_save_path = os.path.join(self.checkpoint_dir, 'config.json')
-        with open(config_save_path, 'w') as handle:
-            json.dump(config, handle, indent=4, sort_keys=False)
-
         if resume:
             self._resume_checkpoint(resume)
-    
+        elif 'pretrained' in config['trainer']:
+            # load pretrained model if provide
+            self.logger.info("load pretrained model from %s" % config['trainer']['pretrained'])
+            self.model.load_state_dict(torch.load(config['trainer']['pretrained']), False)
+
+
     def _prepare_device(self, n_gpu_use):
         """ 
         setup GPU device if available, move model into configured device
@@ -82,9 +94,9 @@ class BaseTrainer:
             log = {'epoch': epoch}
             for key, value in result.items():
                 if key == 'metrics':
-                    log.update({mtr.__name__ : value[i] for i, mtr in enumerate(self.metrics)})
+                    log.update({name : mtr for name, mtr in zip(value[0], value[1])})
                 elif key == 'val_metrics':
-                    log.update({'val_' + mtr.__name__ : value[i] for i, mtr in enumerate(self.metrics)})
+                    log.update({'val_' + name : mtr for name, mtr in zip(value[0], value[1])})
                 else:
                     log[key] = value
 
