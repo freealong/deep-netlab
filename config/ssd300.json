@@ -6,5 +6,7 @@
   "min_sizes": [30, 60, 111, 162, 213, 264],
   "max_sizes": [60, 111, 162, 213, 264, 315],
   "variance": [0.1, 0.2],
-  "clip": true
+  "clip": true,
+  "match_thresh": 0.5,
+  "negpos_ratio": 3
 }

@@ -3,10 +3,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from base import BaseModel
 from model.common import *
 
 
-class SSD(nn.Module):
+class SSD(BaseModel):
     def __init__(self, phase, params_cfg):
         super(SSD, self).__init__()
         # load params
@@ -30,6 +31,11 @@ class SSD(nn.Module):
                                                    self.aspect_ratios, self.feature_maps_dims, self.clip)
         if self.phase == "test":
             self.softmax = nn.Softmax(dim=-1)
+        else:
+            self.match_thresh = self.cfg['match_thresh']
+            self.negpos_ratio = self.cfg['negpos_ratio']
+            self.loc_loss = nn.SmoothL1Loss(reduction='sum')
+            self.conf_loss = nn.CrossEntropyLoss(reduction='none')
 
     def forward(self, x, conf_thresh=0.5, nms_thresh=0.5):
         batch_size = x.shape[0]
@@ -67,6 +73,34 @@ class SSD(nn.Module):
         else:
             output = (loc, conf, self.prior_boxes)
         return output
+
+    def multibox_loss(self, output, target):
+        loc, conf, prior_boxes = output
+        loc_t, conf_t, mask_t = transform_truths(target, prior_boxes, self.variance, self.match_thresh)
+        loc = loc.view(-1, 4)
+        conf = conf.view(-1, self.num_classes)
+        loc_t = loc_t.view(-1, 4)
+        conf_t = conf_t.view(-1)
+        mask_t = mask_t.view(-1)
+        # localization loss
+        loc_p = loc[mask_t, :]
+        loc_t = loc_t[mask_t, :]
+        loc_loss = self.loc_loss(loc_p, loc_t)
+        # positive classification loss
+        conf_p = conf[mask_t, :]
+        pos_conf_loss = self.conf_loss(conf_p, conf_t[mask_t])
+        # negitive classification loss
+        conf_n = conf[~mask_t, :]
+        neg_conf_loss = self.conf_loss(conf_n, conf_t[~mask_t])
+        # hard negative mining
+        sorted_neg_conf_loss, _ = neg_conf_loss.sort(descending=True)
+        num_pos = conf_p.size(0)
+        num_neg = min(num_pos * self.negpos_ratio, conf_n.size(0))
+        selected_neg_conf_loss = sorted_neg_conf_loss[:num_neg]
+        # classification loss
+        conf_loss = pos_conf_loss.sum() + selected_neg_conf_loss.sum()
+        return (loc_loss + conf_loss) / num_pos
+
 
     @staticmethod
     def create_base(in_channels=3, batch_norm=False):
@@ -181,14 +215,19 @@ if __name__ == "__main__":
     x = torch.from_numpy(x).permute(2, 0, 1)
     input = x.unsqueeze(0)
 
+
+    target = torch.tensor([[0.1, 0.1, 0.2, 0.2, 1],
+                           [0.15, 0.1, 0.22, 0.24, 9],
+                           [0.5, 0.3, 0.6, 0.5, 2]])
+    target = target.unsqueeze(0)
     if torch.cuda.is_available():
         input = input.cuda()
         model = model.cuda()
+        target = target.cuda()
     output = model.forward(input, 0.6)
-    transform_truths([torch.tensor([[0.1, 0.1, 0.2, 0.2, 1],
-                                             [0.15, 0.1, 0.22, 0.24, 9],
-                                             [0.5, 0.3, 0.6, 0.5, 2]]).cuda()], output[2], 21, model.variance, 0.5)
 
+    loss = model.multibox_loss(output, target)
+    loss.backward()
 
     print(output)
     output[:, 0] *= 602

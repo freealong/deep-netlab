@@ -113,7 +113,7 @@ def decode_boxes(loc, priors, variances):
     return boxes
 
 
-def transform_truths(truths, priors, num_classes, variance, threshold=0.5):
+def transform_truths(truths, priors, variance, threshold=0.5):
     """
     transform ground truth to loc_gt, conf_gt
     :param truths: shape: [batch_size, num_objects, 5]
@@ -126,9 +126,8 @@ def transform_truths(truths, priors, num_classes, variance, threshold=0.5):
     """
     batch_size = len(truths)
     num_priors = priors.size(0)
-    loc_gt = torch.zeros(batch_size, num_priors, 4, device=priors.device, dtype=priors.dtype)
-    conf_gt = torch.zeros(batch_size, num_priors, num_classes, device=priors.device, dtype=priors.dtype)
-    conf_gt[:, 0] = 1 # set one-hot conf at index 0 to 1(background)
+    loc_gt = torch.zeros(batch_size, num_priors, 4, device=priors.device, dtype=priors.dtype, requires_grad=False)
+    conf_gt = torch.zeros(batch_size, num_priors, device=priors.device, dtype=torch.long, requires_grad=False)
     matched_masks = []
     for i in range(batch_size):
         box_gt = truths[i][:, :4]
@@ -141,7 +140,7 @@ def transform_truths(truths, priors, num_classes, variance, threshold=0.5):
                                                       device=best_truth_idx.device)
         matched_mask = best_truth_idx > -1
         matched_value = best_truth_idx[matched_mask]
-        conf_gt[i, matched_mask, cls_gt[matched_value]] = 1
+        conf_gt[i, matched_mask] = cls_gt[matched_value]
         loc_gt[i, matched_mask] = encode_boxes(box_gt[matched_value], priors[matched_mask], variance)
         matched_masks.append(matched_mask)
     return loc_gt, conf_gt, torch.cat(matched_masks)

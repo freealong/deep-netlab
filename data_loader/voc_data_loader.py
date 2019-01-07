@@ -101,7 +101,7 @@ class VOCDetection(data.Dataset):
         self.ids = list()
         for year_name in image_sets:
             year, name = year_name.split('-')
-            rootpath = os.path.join(self.root, 'VOCdevkit', 'VOC' + year)
+            rootpath = os.path.join(self.root, 'VOC' + year)
             for line in open(os.path.join(rootpath, 'ImageSets', 'Main', name + '.txt')):
                 self.ids.append((rootpath, line.strip()))
 

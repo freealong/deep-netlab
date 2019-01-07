@@ -1,1 +1,2 @@
 from .mnist_data_loader import MnistDataLoader
+from .voc_data_loader import VOCDataLoader

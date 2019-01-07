@@ -49,7 +49,11 @@ class Trainer(BaseTrainer):
         total_loss = 0
         total_metrics = np.zeros(len(self.metrics))
         for batch_idx, (data, target) in enumerate(self.data_loader):
-            data, target = data.to(self.device), target.to(self.device)
+            data = data.to(self.device)
+            if isinstance(target, list):
+                target = [x.to(self.device) for x in target]
+            else:
+                target = target.to(self.device)
 
             self.optimizer.zero_grad()
             output = self.model(data)

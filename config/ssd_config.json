@@ -21,28 +21,27 @@
         }
     },
     "optimizer": {
-        "type": "Adam",
+        "type": "SGD",
         "args":{
             "lr": 0.001,
-            "weight_decay": 0,
-            "amsgrad": true
+            "momentum": 0.9,
+            "weight_decay": 5e-4
         }
     },
-    "loss": "nll_loss",
+    "loss": "multibox_loss",
     "metrics": [
-        "my_metric", "my_metric2"
     ],
     "lr_scheduler": {
-        "type":"StepLR",
+        "type":"MultiStepLR",
         "args":{
-            "step_size":50,
+            "milestones": [80, 100, 120],
             "gamma":0.1
         }
     },
     "trainer": {
-        "epochs": 1000,
+        "epochs": 120,
         "save_dir": "saved/",
-        "save_freq": 1,
+        "save_freq": 10,
         "verbosity": 2,
         "monitor": "val_loss",
         "monitor_mode": "min"

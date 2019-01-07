@@ -2,10 +2,10 @@ import os
 import json
 import argparse
 import torch
-import data_loader.data_loaders as module_data
+import data_loader as module_data
 import model.loss as module_loss
 import model.metric as module_metric
-import model.model as module_arch
+import model as module_arch
 from trainer import Trainer
 from utils import Logger
 
@@ -25,7 +25,10 @@ def main(config, resume):
     model.summary()
 
     # get function handles of loss and metrics
-    loss = getattr(module_loss, config['loss'])
+    try:
+        loss = getattr(module_loss, config['loss'])
+    except AttributeError:
+        loss = getattr(model, config['loss'])
     metrics = [getattr(module_metric, met) for met in config['metrics']]
 
     # build optimizer, learning rate scheduler. delete every lines containing lr_scheduler for disabling scheduler
