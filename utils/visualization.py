@@ -77,7 +77,7 @@ def draw_text(image, text, point, fg_color=(255, 255, 255), bg_color=(0, 0, 0), 
     cv2.putText(image, text, (x, y + text_size[1]), cv2.FONT_HERSHEY_SIMPLEX, scale, fg_color, thickness)
 
 
-def draw_detections(image, detections, class_names=None):
+def draw_detections(image, detections, class_names=None, percent=False):
     '''
     display detections in image
     :param image:
@@ -97,12 +97,24 @@ def draw_detections(image, detections, class_names=None):
         color = colors[i]
         text_color = [1 - x for x in color]
         # bbox
-        x1, y1, x2, y2, cls_index, cls_score = detections[i]
+        try:
+            x1, y1, x2, y2, cls_index, cls_score = detections[i]
+        except:
+            x1, y1, x2, y2, cls_index = detections[i]
+            cls_score = None
+        if percent:
+            x1 *= image.shape[1]
+            y1 *= image.shape[0]
+            x2 *= image.shape[1]
+            y2 *= image.shape[0]
         draw_box(image, [x1, y1, x2, y2], color)
 
         # bbox's caption
         class_name = str(int(cls_index)) if class_names is None else class_names[int(cls_index)]
-        caption = '%s, %.3f' % (class_name, cls_score)
+        if cls_score is None:
+            caption = '%s' % class_name
+        else:
+            caption = '%s, %.3f' % (class_name, cls_score)
         draw_text(image, caption, (x1, y1), fg_color=text_color, bg_color=color)
 
 

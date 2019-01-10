@@ -212,7 +212,7 @@ if __name__ == "__main__":
 
     cfg_file = "../config/ssd300.json"
     img_file = "../images/dog-cycle-car.png"
-    weights_file = "../weights.pth"
+    weights_file = "../data/ssd300_mAP_77.43_v2.pth"
 
     # prepare model
     model = SSD('train', cfg_file)
@@ -237,15 +237,17 @@ if __name__ == "__main__":
     input = x.unsqueeze(0)
 
 
+    input = torch.load("../../ssd.pytorch/demo/input.pth").cpu()
     target = torch.tensor([[0.1, 0.1, 0.2, 0.2, 1],
                            [0.15, 0.1, 0.22, 0.24, 9],
                            [0.5, 0.3, 0.6, 0.5, 2]])
     target = target.unsqueeze(0)
-    if torch.cuda.is_available():
-        input = input.cuda()
-        model = model.cuda()
-        target = target.cuda()
+    # if torch.cuda.is_available():
+    #     input = input.cuda()
+    #     model = model.cuda()
+    #     target = target.cuda()
     output = model.forward(input, 0.6)
+    torch.save(output, "output.pth")
 
     loss = model.multibox_loss(output, target)
     loss.backward()

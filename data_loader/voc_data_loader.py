@@ -12,6 +12,7 @@ else:
 
 from PIL import Image
 
+from data_loader.detection_transforms import SSDAugmentation
 
 VOC_CLASSES = ('background',
     'aeroplane', 'bicycle', 'bird', 'boat',
@@ -67,7 +68,7 @@ class VOCAnnotationTransform(object):
             res += [bndbox]  # [xmin, ymin, xmax, ymax, label_ind]
             # img_id = target.find('filename').text[:-4]
 
-        return res  # [[xmin, ymin, xmax, ymax, label_ind], ... ]
+        return torch.tensor(res)  # [[xmin, ymin, xmax, ymax, label_ind], ... ]
 
 
 class VOCDetection(data.Dataset):
@@ -92,7 +93,7 @@ class VOCDetection(data.Dataset):
                  image_sets=['2007-trainval', '2012-trainval'],
                  download=False,
                  transform=None,
-                 target_transform=None):
+                 target_transform=VOCAnnotationTransform()):
         self.root = os.path.expanduser(root)
         self.transform = transform
         self.target_transform = target_transform
@@ -118,11 +119,11 @@ class VOCDetection(data.Dataset):
         width, height = img.width, img.height
         target = ET.parse(self._annopath % id).getroot()
 
-        if self.transform is not None:
-            img = self.transform(img)
-
         if self.target_transform is not None:
             target = self.target_transform(target, width, height)
+
+        if self.transform is not None:
+            img, target = self.transform(img, target)
 
         return img, target
 
@@ -156,21 +157,32 @@ from base import BaseDataLoader
 
 def voc_collate(batch):
    images = [sample[0] for sample in batch]
-   labels = [torch.tensor(sample[1]) for sample in batch]
+   labels = [sample[1] for sample in batch]
    return torch.stack(images, 0), labels
 
 
 class VOCDataLoader(BaseDataLoader):
-
     def __init__(self, data_dir, batch_size, shuffle, num_workers, image_sets, validation_split=0):
-        trsfm = transforms.Compose([
-            transforms.Resize((300, 300)),
-            transforms.ToTensor(),
-            transforms.Normalize((123.0 / 255., 117.0 / 255., 104. / 255.), (1., 1., 1.))
-        ])
-        target_trsfm = VOCAnnotationTransform()
         self.data_dir = data_dir
-        self.dataset = VOCDetection(self.data_dir, image_sets=image_sets, transform=trsfm,
-                                    target_transform=target_trsfm)
+        self.dataset = VOCDetection(self.data_dir, image_sets=image_sets, transform=SSDAugmentation())
         super(VOCDataLoader, self).__init__(self.dataset, batch_size, shuffle, num_workers, validation_split,
                                             collate_fn=voc_collate)
+
+
+if __name__ == "__main__":
+    import cv2
+    import numpy as np
+    from numpy import random
+    from utils.visualization import draw_detections
+
+    dataset = VOCDetection("/mnt/datasets/voc/VOCdevkit", transform=SSDAugmentation())
+    while True:
+        img, tgt = dataset[random.randint(0, len(dataset))]
+        np_img = img.permute(1, 2, 0).numpy()
+        np_img = np_img[:, :, (2, 1, 0)]
+        np_img = np.ascontiguousarray(np_img)
+        draw_detections(np_img, tgt.numpy(), class_names=VOC_CLASSES, percent=True)
+        cv2.imshow("img", np_img)
+        key = cv2.waitKey(0)
+        if chr(key) == 'q':
+            break
