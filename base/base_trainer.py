@@ -64,7 +64,7 @@ class BaseTrainer:
         elif 'pretrained' in config['trainer']:
             # load pretrained model if provide
             self.logger.info("load pretrained model from %s" % config['trainer']['pretrained'])
-            self.model.load_state_dict(torch.load(config['trainer']['pretrained']), False)
+            self.model.load_state_dict(torch.load(config['trainer']['pretrained']))
 
 
     def _prepare_device(self, n_gpu_use):

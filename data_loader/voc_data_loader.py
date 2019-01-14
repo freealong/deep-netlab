@@ -162,9 +162,9 @@ def voc_collate(batch):
 
 
 class VOCDataLoader(BaseDataLoader):
-    def __init__(self, data_dir, batch_size, shuffle, num_workers, image_sets, validation_split=0):
+    def __init__(self, data_dir, batch_size, shuffle, num_workers, image_sets, augment=True, validation_split=0):
         self.data_dir = data_dir
-        self.dataset = VOCDetection(self.data_dir, image_sets=image_sets, transform=SSDAugmentation())
+        self.dataset = VOCDetection(self.data_dir, image_sets=image_sets, transform=SSDAugmentation(augment=augment))
         super(VOCDataLoader, self).__init__(self.dataset, batch_size, shuffle, num_workers, validation_split,
                                             collate_fn=voc_collate)
 

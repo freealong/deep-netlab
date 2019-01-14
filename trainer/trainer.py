@@ -4,6 +4,21 @@ from torchvision.utils import make_grid
 from base import BaseTrainer
 
 
+def eval_metrics(metrics, output, target):
+    names, values = [], []
+    for i, metric in enumerate(metrics):
+        result = metric(output, target)
+        if isinstance(result, tuple) or isinstance(result, list):
+            names.append(result[0])
+            values.append(result[1])
+        else:
+            names.append(metric.__name__)
+            values.append(result)
+    flat_names = [item for sublist in names for item in sublist]
+    flat_values = np.array([item for sublist in values for item in sublist])
+    return flat_names, flat_values
+
+
 class Trainer(BaseTrainer):
     """
     Trainer class
@@ -20,26 +35,11 @@ class Trainer(BaseTrainer):
         self.do_validation = self.valid_data_loader is not None
         self.lr_scheduler = lr_scheduler
         self.log_step = int(np.sqrt(data_loader.batch_size))
-        self.logger.info("data loader size: {}×{}".format(self.data_loader.batch_size, len(self.data_loader)))
+        self.logger.info("data loader size: {}*{}".format(self.data_loader.batch_size, len(self.data_loader)))
         if self.do_validation:
-            self.logger.info("valid data loader size: {}×{}".format(self.valid_data_loader.batch_size,
+            self.logger.info("valid data loader size: {}*{}".format(self.valid_data_loader.batch_size,
                                                                     len(self.valid_data_loader)))
 
-    def _eval_metrics(self, output, target):
-        names, values = [], []
-        for i, metric in enumerate(self.metrics):
-            result = metric(output, target)
-            if isinstance(result, tuple) or isinstance(result, list):
-                names.append(result[0])
-                values.append(result[1])
-            else:
-                names.append(metric.__name__)
-                values.append(result)
-        flat_names = [item for sublist in names for item in sublist]
-        flat_values = np.array([item for sublist in values for item in sublist])
-        for i, name in enumerate(flat_names):
-            self.writer.add_scalar(name, flat_values[i])
-        return flat_names, flat_values
 
     def _train_epoch(self, epoch):
         """
@@ -75,11 +75,15 @@ class Trainer(BaseTrainer):
             loss.backward()
             self.optimizer.step()
 
+            total_loss += loss.item()
+            metric_names, metrics = eval_metrics(self.metrics, output, target)
+            total_metrics += metrics
+
+            # visualize
             self.writer.set_step((epoch - 1) * len(self.data_loader) + batch_idx)
             self.writer.add_scalar('loss', loss.item())
-            total_loss += loss.item()
-            metric_names, metrics = self._eval_metrics(output, target)
-            total_metrics += metrics
+            for name, metric in zip(metric_names, metrics):
+                self.writer.add_scalar(name, metric)
 
             if self.verbosity >= 2 and batch_idx % self.log_step == 0:
                 self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)] Loss: {:.6f}'.format(
@@ -88,11 +92,12 @@ class Trainer(BaseTrainer):
                     self.data_loader.n_samples,
                     100.0 * batch_idx / len(self.data_loader),
                     loss.item()))
-                self.writer.add_image('input', make_grid(data.cpu(), nrow=8, normalize=True))
+                # self.writer.add_image('input', make_grid(data.cpu(), nrow=8, normalize=True))
 
         log = {
             'loss': total_loss / len(self.data_loader),
-            'metrics': (metric_names, (total_metrics / len(self.data_loader)).tolist())
+            'metrics': (metric_names, (total_metrics / len(self.data_loader)).tolist()),
+            'learning_rate': self.lr_scheduler.get_lr()
         }
 
         if self.do_validation and epoch % self.validate_freq == 0:
@@ -100,7 +105,7 @@ class Trainer(BaseTrainer):
             log = {**log, **val_log}
 
         if self.lr_scheduler is not None:
-            self.lr_scheduler.step()
+            self.lr_scheduler.step(epoch)
 
         return log
 
@@ -128,14 +133,20 @@ class Trainer(BaseTrainer):
                 output = self.model(data)
                 loss = self.loss(output, target)
 
-                self.writer.set_step((epoch - 1) * len(self.valid_data_loader) + batch_idx, 'valid')
-                self.writer.add_scalar('loss', loss.item())
                 total_val_loss += loss.item()
-                metric_names, metrics = self._eval_metrics(output, target)
+                metric_names, metrics = eval_metrics(self.metrics, output, target)
                 total_val_metrics += metrics
-                self.writer.add_image('input', make_grid(data.cpu(), nrow=8, normalize=True))
+                # self.writer.add_image('input', make_grid(data.cpu(), nrow=8, normalize=True))
+
+        # visualize
+        val_loss = total_val_loss / len(self.valid_data_loader)
+        val_metrics = (metric_names, (total_val_metrics / len(self.valid_data_loader)).tolist())
+        self.writer.set_step(epoch * len(self.valid_data_loader) - 1, 'valid')
+        self.writer.add_scalar('loss', val_loss)
+        for name, metric in zip(val_metrics[0], val_metrics[1]):
+            self.writer.add_scalar(name, metric)
 
         return {
-            'val_loss': total_val_loss / len(self.valid_data_loader),
-            'val_metrics': (metric_names, (total_val_metrics / len(self.valid_data_loader)).tolist())
+            'val_loss': val_loss,
+            'val_metrics': val_metrics
         }

@@ -21,7 +21,7 @@ def main(config, resume):
     data_loader = get_instance(module_data, 'data_loader', config)
     try:
         valid_data_loader = get_instance(module_data, 'valid_data_loader', config)
-    except AttributeError:
+    except Exception:
         valid_data_loader = data_loader.split_validation()
 
     # build model architecture

@@ -119,17 +119,24 @@ class RandomSampleCrop(object):
 
 
 class SSDAugmentation(object):
-    def __init__(self, size=(300, 300), mean=(104, 117, 123)):
+    def __init__(self, size=(300, 300), mean=(104, 117, 123), augment=True):
         self.normal_mean = [x / 255. for x in mean]
-        self.augment = Compose([
-            RandomPad(ratio=0.5, fill=mean, p=0.5),
-            RandomSampleCrop(),
-            transforms.Resize(size=size),
-            transforms.ColorJitter(brightness=0.125, contrast=0.5, saturation=0.5, hue=0.05),
-            RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(self.normal_mean, (1., 1., 1.))
-        ])
+        if augment:
+            self.augment = Compose([
+                RandomPad(ratio=0.5, fill=mean, p=0.5),
+                RandomSampleCrop(),
+                transforms.Resize(size=size),
+                transforms.ColorJitter(brightness=0.125, contrast=0.5, saturation=0.5, hue=0.05),
+                RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(self.normal_mean, (1., 1., 1.))
+            ])
+        else:
+            self.augment = Compose([
+                transforms.Resize(size=size),
+                transforms.ToTensor(),
+                transforms.Normalize(self.normal_mean, (1., 1., 1.))
+            ])
 
     def __call__(self, img, tgt):
         return self.augment(img, tgt)

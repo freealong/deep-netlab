@@ -12,11 +12,12 @@
     "data_loader": {
         "type": "VOCDataLoader",
         "args":{
-            "data_dir": "/mnt/datasets/voc/VOCdevkit",
+            "data_dir": "data/voc/VOCdevkit",
             "batch_size": 32,
             "shuffle": true,
             "validation_split": 0,
             "num_workers": 4,
+            "augment": true,
             "image_sets": ["2007-trainval", "2012-trainval"]
         }
     },
@@ -25,10 +26,11 @@
     "valid_data_loader": {
         "type": "VOCDataLoader",
         "args":{
-            "data_dir": "/mnt/datasets/voc/VOCdevkit",
+            "data_dir": "data/voc/VOCdevkit",
             "batch_size": 16,
             "shuffle": false,
             "num_workers": 2,
+            "augment": false,
             "image_sets": ["2007-test"]
         }
     },
@@ -51,7 +53,7 @@
         }
     },
     "trainer": {
-        "pretrained": "data/vgg16_reducedfc.pth", // optional
+        "pretrained": "data/vgg16_ssd300.pth", // optional
         "epochs": 120,
         "save_dir": "saved/",
         "save_freq": 10,
@@ -62,6 +64,6 @@
     },
     "visualization":{
         "tensorboardX": true,
-        "log_dir": "saved/runs"
+        "log_dir": "saved"
     }
 }
