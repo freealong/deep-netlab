@@ -114,7 +114,7 @@ class SSD(BaseModel):
         for i in range(batch_size):
             if len(target[i]) == 0:
                 continue
-            metric = compute_detection_metrics(output[i], target[i])
+            metric = compute_detection_metrics(output[i], target[i], 0.7)
             if metric_avg is None:
                 metric_avg = list(metric)
             else:
