@@ -9,7 +9,7 @@ from train import get_instance
 from trainer import eval_metrics
 
 
-def main(config, resume):
+def main(config, resume, save=True):
     # setup data_loader instances
     # data_loader = getattr(module_data, config['data_loader']['type'])(
     #     config['data_loader']['args']['data_dir'],
@@ -22,13 +22,9 @@ def main(config, resume):
     try:
         data_loader = get_instance(module_data, 'test_data_loader', config)
         print("using test data loader")
-    except Exception:
-        try:
-            data_loader = get_instance(module_data, 'valid_data_loader', config)
-        except Exception:
-            train_data_loader = get_instance(module_data, 'data_loader', config)
-            data_loader = train_data_loader.split_validation()
-        print("using valid data loader")
+    except KeyError:
+        print("no test data loader defined")
+        return
 
 
     # build model architecture
@@ -60,6 +56,8 @@ def main(config, resume):
     model = model.to(device)
     model.eval()
 
+    all_preds, all_gts = [], []
+
     total_loss = 0.0
     total_metrics = 0.0
     metric_names = None
@@ -72,43 +70,59 @@ def main(config, resume):
             else:
                 target = target.to(device)
             output = model(data)
-            #
-            # save sample images, or do something with output here
-            #
-            
-            # computing loss, metrics on test set
+
+            # computing loss
             loss = loss_fn(output, target)
             total_loss += loss.item()
+            # try to convert output to detection results if net is a detection model
+            try:
+                output = model.get_detections(output)
+            except:
+                pass
+            # computing metrics
             metric_names, metrics = eval_metrics(metric_fns, output, target)
             total_metrics += metrics
+            # collect pred and gt
+            if save:
+                all_preds.extend([x.cpu().numpy() for x in list(output)])
+                all_gts.extend([x.cpu().numpy() for x in list(target)])
             # print info
-            print_info = "[{}/{} ({:.0f}%)]: Loss: {:.6f} ".format(
+            info = "[{}/{} ({:.0f}%)]: Loss: {:.6f} ".format(
                 i,
                 len(data_loader),
                 100.0 * i / len(data_loader),
                 loss)
             for name, metric in zip(metric_names, metrics):
-                print_info += "{}: {:.6f} ".format(name, metric)
-            print(print_info)
+                info += "{}: {:.6f} ".format(name, metric)
+            print(info)
 
     log = {'loss': total_loss / len(data_loader)}
     avg_metrics = (metric_names, (total_metrics / len(data_loader)).tolist())
     log.update({name: met for name, met in zip(avg_metrics[0], avg_metrics[1])})
     print(log)
 
+    if save:
+        torch.save({'preds': all_preds, 'gts': all_gts}, "preds_gts.pth")
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='PyTorch Template')
 
     parser.add_argument('-r', '--resume', default=None, type=str, required=True,
-                           help='path to latest checkpoint (default: None)')
+                        help='path to latest checkpoint (default: None)')
     parser.add_argument('-d', '--device', default=None, type=str,
-                           help='indices of GPUs to enable (default: all)')
+                        help='indices of GPUs to enable (default: all)')
+    parser.add_argument('-b', '--batch_size', default=None, type=int,
+                        help='set batch size of data loader')
+    parser.add_argument('-s', '--save', default=True, type=bool,
+                        help='save output and ground truth')
 
     args = parser.parse_args()
 
     config = torch.load(args.resume)['config']
     if args.device:
         os.environ["CUDA_VISIBLE_DEVICES"]=args.device
+    if args.batch_size:
+        config['test_data_loader']['args']['batch_size'] = args.batch_size
 
-    main(config, args.resume)
+    main(config, args.resume, args.save)

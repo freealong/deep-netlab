@@ -23,7 +23,7 @@
     },
     // if valid_data_loader is defined, we will use the config to build a valid_data_loader,
     // or we will build a valid_data_loader split from data_loader by its validation_split value
-    "valid_data_loader": {
+    "test_data_loader": {
         "type": "VOCDataLoader",
         "args":{
             "data_dir": "data/voc/VOCdevkit",

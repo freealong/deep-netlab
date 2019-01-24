@@ -76,6 +76,14 @@ class SSD(BaseModel):
             output = (loc, conf, self.prior_boxes)
         return output
 
+    def get_detections(self, output):
+        if isinstance(output, tuple):
+            loc, conf, prior = output
+            conf = self.softmax(conf)
+            return generate_detections(loc, conf, prior, self.variance, self.conf_thresh, self.nms_thresh)
+        else:
+            return output
+
     def multibox_loss(self, output, target):
         loc, conf, prior_boxes = output
         loc_t, conf_t, mask_t = transform_truths(target, prior_boxes, self.variance, self.match_thresh)
@@ -104,17 +112,13 @@ class SSD(BaseModel):
         return (loc_loss + conf_loss) / num_pos
 
     def detection_metric(self, output, target):
-        if self.phase != "test":
-            loc, conf, prior = output
-            conf = self.softmax(conf)
-            output = generate_detections(loc, conf, prior, self.variance, self.conf_thresh, self.nms_thresh)
         batch_size = len(target)
         metric_avg = None
         valid_target = 0
         for i in range(batch_size):
             if len(target[i]) == 0:
                 continue
-            metric = compute_detection_metrics(output[i], target[i], 0.7)
+            metric = compute_detection_metrics(output[i], target[i])
             if metric_avg is None:
                 metric_avg = list(metric)
             else:

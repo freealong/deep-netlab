@@ -58,22 +58,22 @@ def vary_boxes_by_aspect_ratios(box, next_box, aspect_ratios):
     return prior_boxes
 
 
-def generate_prior_boxes_grid(box_sizes, grid_size, device=torch.device("cpu"), clip=True):
+def generate_prior_boxes_grid(box_sizes, grid_size, clip=True):
     """
-    :param box_sizes: a list of prior box size, eg: [[0.1, 0.1], [0.2, 0.2]]
+    :param box_sizes: a list of prior box size, eg: [[0.1, 0.1], [0.2, 0.2], [w, h]]
     :param grid_size: feature map size, [h, w]
-    :param device: torch device
-    :return: tensor with shape: [grid_h, grid_w, prior box num, 4]
+    :param clip: whether clip output tensor in [0, 1]
+    :return: tensor : grid_h * grid_w * prior_box_num * [cx, cy, w, h]
     """
-    cy, cx = torch.meshgrid([torch.arange(grid_size[0], dtype=torch.float32, device=device),
-                             torch.arange(grid_size[1], dtype=torch.float32, device=device)])
+    cy, cx = torch.meshgrid([torch.arange(grid_size[0], dtype=torch.float32),
+                             torch.arange(grid_size[1], dtype=torch.float32)])
     cy = cy.add(0.5).div(grid_size[0])
     cx = cx.add(0.5).div(grid_size[1])
     cy = cy.unsqueeze(2)
     cx = cx.unsqueeze(2)
     grids = []
     for box_size in box_sizes:
-        box_size = torch.tensor(box_size, device=device, dtype=torch.float32)
+        box_size = torch.tensor(box_size, dtype=torch.float32)
         box_size = box_size.repeat(grid_size[0], grid_size[1], 1)
         grid = torch.cat([cx, cy, box_size], dim=2)
         grids.append(grid)
@@ -83,46 +83,54 @@ def generate_prior_boxes_grid(box_sizes, grid_size, device=torch.device("cpu"), 
     return grids
 
 
-def encode_boxes(gt, priors, variances):
+def encode_boxes(gt, priors, variances=None):
     """
     encode locations from predictions using priors to undo the encoding we did for offset
     regression at training time, see https://github.com/rykov8/ssd_keras/issues/53 for more about variance
-    :param gt: tensor, shape: [num_priors, 4], [x1, y1, x2, y2]
-    :param priors: tensor, shape: [num_priors, 4], [cx, cy, w, h]
+    :param gt: tensor, num_priors * [x1, y1, x2, y2]
+    :param priors: tensor, num_priors * [cx, cy, w, h]
     :param variances: list[float], shape: 2
-    :return:
+    :return: tensor, num_priors * [cx, cy, w, h]
     """
-    ghat_cxcy = ((gt[:, :2] + gt[:, 2:]) / 2 - priors[:, :2]) / (variances[0] * priors[:, 2:])
-    ghat_wh = torch.log((gt[:, 2:] - gt[:, :2]) / priors[:, 2:]) / variances[1]
+    if variances is None:
+        ghat_cxcy = ((gt[:, :2] + gt[:, 2:]) / 2 - priors[:, :2]) / priors[:, 2:]
+        ghat_wh = torch.log((gt[:, 2:] - gt[:, :2]) / priors[:, 2:])
+    else:
+        ghat_cxcy = ((gt[:, :2] + gt[:, 2:]) / 2 - priors[:, :2]) / (variances[0] * priors[:, 2:])
+        ghat_wh = torch.log((gt[:, 2:] - gt[:, :2]) / priors[:, 2:]) / variances[1]
     return torch.cat([ghat_cxcy, ghat_wh], 1)
 
 
-def decode_boxes(loc, priors, variances):
+def decode_boxes(loc, priors, variances=None):
     """
     decode locations from predictions using priors to undo the encoding we did for offset
     regression at training time, see https://github.com/rykov8/ssd_keras/issues/53 for more about variance
-    :param loc: tensor, shape: [num_priors, 4]
-    :param priors: tensor, shape: [num_priors, 4]
+    :param loc: tensor, shape: num_priors * [cx, cy, w, h]
+    :param priors: tensor, shape: num_priors * [cx, cy, w, h]
     :param variances: list[float], shape: 2
-    :return:
+    :return: tensor, num_priors * [x1, y1, x2, y2]
     """
-    boxes = torch.cat([priors[:, :2] + variances[0] * loc[:, :2] * priors[:, 2:],
-                       priors[:, 2:] * torch.exp(variances[1] * loc[:, 2:])], dim=1)
+    if variances is None:
+        boxes = torch.cat([priors[:, :2] + loc[:, :2] * priors[:, 2:],
+                           priors[:, 2:] * torch.exp(loc[:, 2:])], dim=1)
+    else:
+        boxes = torch.cat([priors[:, :2] + variances[0] * loc[:, :2] * priors[:, 2:],
+                           priors[:, 2:] * torch.exp(variances[1] * loc[:, 2:])], dim=1)
     boxes[:, :2] -= boxes[:, 2:] / 2
     boxes[:, 2:] += boxes[:, :2]
     return boxes
 
 
-def transform_truths(truths, priors, variance, threshold=0.5):
+def transform_truths(truths, priors, variance=None, match_thresh=0.5):
     """
     transform ground truth to loc_gt, conf_gt
-    :param truths: shape: [batch_size, num_objects, 5]
-    :param priors: [num_priors, 4]
+    :param truths: shape: batch_size * num_objects * [x1, y1, x2, y2, cls_id]
+    :param priors: num_priors * [cx, cy, w, h]
     :param variance:
-    :param threshold:
-    :return: loc_gt: shape: [batch_size, num_priors, 4],
-             conf_gt
-             matched_masks: shape: [batch_size, num_priors]
+    :param match_thresh:
+    :return: loc_gt: batch_size * num_priors * [cx, cy, w, h]
+             conf_gt: batch_size * num_priors * num_classes
+             matched_masks: batch_size * num_priors
     """
     batch_size = len(truths)
     num_priors = priors.size(0)
@@ -135,7 +143,7 @@ def transform_truths(truths, priors, variance, threshold=0.5):
         overlaps = compute_overlaps(box_gt, format_bbox(priors))
         best_truth_overlap, best_truth_idx = overlaps.max(dim=0)
         best_prior_idx = overlaps.argmax(dim=1)
-        best_truth_idx[best_truth_overlap <= threshold] = -1
+        best_truth_idx[best_truth_overlap <= match_thresh] = -1
         best_truth_idx[best_prior_idx] = torch.arange(len(box_gt), dtype=best_truth_idx.dtype,
                                                       device=best_truth_idx.device)
         matched_mask = best_truth_idx > -1
@@ -146,13 +154,16 @@ def transform_truths(truths, priors, variance, threshold=0.5):
     return loc_gt, conf_gt, torch.cat(matched_masks)
 
 
-def generate_detections(loc_data, conf_data, prior_data, variance, confidence, iou_threshold=0.5):
+def generate_detections(loc_data, conf_data, prior_data, variance=None, confidence=0.5, nms_threshold=0.5):
     """
-    generate detections([y1, x1, y2, x2, cls, score]) from predictions
-    :param loc_data: tensor, shape: [batch_size, num_priors, 4]
-    :param conf_data: tensor, shape: [batch_size, num_priors, num_classes]
-    :param prior_data: tensor shape: [num_priors, 4]
-    :return:
+    generate detections([x1, y1, x2, y2, cls, score]) from predictions
+    :param loc_data: tensor: batch_size * num_priors * [cx, cy, w, h]
+    :param conf_data: tensor: batch_size * num_priors * num_classes
+    :param prior_data: tensor: num_priors * [cx, cy, w, h]
+    :param variance:
+    :param confidence:
+    :param nms_threshold:
+    :return: list of tensor: batch_size * num_detection * [x1, y1, x2, y2, cls, score]
     """
     batch_size = loc_data.size(0)
 
@@ -177,7 +188,7 @@ def generate_detections(loc_data, conf_data, prior_data, variance, confidence, i
             if cls == 0:
                 continue
             detection_cls = detection[detection[:, 4] == cls, :]
-            detection_filtered = run_nums(detection_cls, 5, iou_threshold)
+            detection_filtered = run_nums(detection_cls, 5, nms_threshold)
             if detections[i].size(0) == 0:
                 detections[i] = detection_filtered
             else:

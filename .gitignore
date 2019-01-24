@@ -111,3 +111,6 @@ pretrained/
 .vscode/
 .idea/
 __MACOSX/
+
+# big data
+*.pth
