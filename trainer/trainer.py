@@ -75,6 +75,12 @@ class Trainer(BaseTrainer):
             loss.backward()
             self.optimizer.step()
 
+            # try to convert output to detection results if net is a detection model
+            try:
+                output = self.model.get_detections(output)
+            except:
+                pass
+
             total_loss += loss.item()
             metric_names, metrics = eval_metrics(self.metrics, output, target)
             total_metrics += metrics
@@ -132,6 +138,12 @@ class Trainer(BaseTrainer):
 
                 output = self.model(data)
                 loss = self.loss(output, target)
+
+                # try to convert output to detection results if net is a detection model
+                try:
+                    output = self.model.get_detections(output)
+                except:
+                    pass
 
                 total_val_loss += loss.item()
                 metric_names, metrics = eval_metrics(self.metrics, output, target)

@@ -1,6 +1,6 @@
 import argparse
 import torch
-from model.detection_metric import *
+from model.metric import *
 
 parser = argparse.ArgumentParser(description='Eval Detection')
 
