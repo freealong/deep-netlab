@@ -9,7 +9,7 @@ if sys.version_info[0] == 2:
     import xml.etree.cElementTree as ET
 else:
     import xml.etree.ElementTree as ET
-
+import numpy as np
 from PIL import Image
 
 from data_loader.detection_transforms import SSDAugmentation
@@ -87,6 +87,7 @@ class VOCDetection(data.Dataset):
         target_transform (callable, required): A function/transform that takes in the
             target and transforms it.
     """
+    MEAN = (104, 117, 123)
 
     def __init__(self,
                  root,
@@ -162,11 +163,23 @@ def voc_collate(batch):
 
 
 class VOCDataLoader(BaseDataLoader):
-    def __init__(self, data_dir, batch_size, shuffle, num_workers, image_sets, augment=True, validation_split=0):
+    def __init__(self, data_dir, batch_size, shuffle, num_workers, image_sets, size, augment=True, validation_split=0):
         self.data_dir = data_dir
-        self.dataset = VOCDetection(self.data_dir, image_sets=image_sets, transform=SSDAugmentation(augment=augment))
+        self.transform = SSDAugmentation(size=size, mean=VOCDetection.MEAN, augment=augment)
+        self.dataset = VOCDetection(self.data_dir, image_sets=image_sets, transform=self.transform)
+        self.class_names = VOC_CLASSES
         super(VOCDataLoader, self).__init__(self.dataset, batch_size, shuffle, num_workers, validation_split,
                                             collate_fn=voc_collate)
+
+    def visualize_transform(self, data):
+        input, target = data
+        np_imgs = input.cpu().permute(0, 2, 3, 1).numpy()
+        for i, m in enumerate(self.transform.normal_mean):
+            np_imgs[:, :, :, i] += m
+        np_imgs = np_imgs[:, :, :, (2, 1, 0)]
+        np_imgs = np.ascontiguousarray(np_imgs)
+        np_target = [x.cpu().numpy() for x in target]
+        return np_imgs, np_target
 
 
 if __name__ == "__main__":

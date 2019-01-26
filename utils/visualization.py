@@ -61,12 +61,12 @@ def random_colors(N, bright=True):
     return colors
 
 
-def draw_box(image, box, color):
+def draw_box(image, box, color, thickness=1, lineType=cv2.LINE_AA):
     """Draw 3-pixel width bounding boxes on the given image array.
     color: list of 3 int values for RGB.
     """
     x1, y1, x2, y2 = box
-    cv2.rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), color)
+    cv2.rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness, lineType)
 
 
 def draw_text(image, text, point, fg_color=(255, 255, 255), bg_color=(0, 0, 0), scale=0.4, thickness=1):

@@ -5,7 +5,6 @@
     "arch": {
         "type": "SSD",
         "args": {
-            "phase": "train",
             "params_cfg": "config/ssd300.json"
         }
     },
@@ -17,6 +16,7 @@
             "shuffle": true,
             "validation_split": 0,
             "num_workers": 4,
+            "size": [300, 300],
             "augment": true,
             "image_sets": ["2007-trainval", "2012-trainval"]
         }
@@ -30,6 +30,7 @@
             "batch_size": 16,
             "shuffle": false,
             "num_workers": 2,
+            "size": [300, 300],
             "augment": false,
             "image_sets": ["2007-test"]
         }
@@ -42,8 +43,8 @@
             "weight_decay": 5e-4
         }
     },
-    "loss": "multibox_loss",
-    "metrics": ["detection_metric"
+    "loss": "calculate_loss",
+    "metrics": ["calculate_metric"
     ],
     "lr_scheduler": {
         "type":"MultiStepLR",

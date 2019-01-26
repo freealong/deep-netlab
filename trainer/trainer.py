@@ -75,9 +75,9 @@ class Trainer(BaseTrainer):
             loss.backward()
             self.optimizer.step()
 
-            # try to convert output to detection results if net is a detection model
+            # try to post process output to before calculate metrics
             try:
-                output = self.model.get_detections(output)
+                output = self.model.postprocess(output)
             except:
                 pass
 
@@ -139,9 +139,9 @@ class Trainer(BaseTrainer):
                 output = self.model(data)
                 loss = self.loss(output, target)
 
-                # try to convert output to detection results if net is a detection model
+                # try to post process output to before calculate metrics
                 try:
-                    output = self.model.get_detections(output)
+                    output = self.model.postprocess(output)
                 except:
                     pass
 

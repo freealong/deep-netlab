@@ -8,10 +8,9 @@ from model.common import *
 
 
 class SSD(BaseModel):
-    def __init__(self, phase, params_cfg):
+    def __init__(self, params_cfg):
         super(SSD, self).__init__()
         # load params
-        self.phase = phase
         self.cfg = json5.load(open(params_cfg))
         self.num_classes = self.cfg['num_classes']
         self.image_dim = self.cfg['image_dim']
@@ -31,11 +30,11 @@ class SSD(BaseModel):
         self.prior_boxes = self.create_prior_boxes(self.min_sizes, self.max_sizes, self.image_dim[:2],
                                                    self.aspect_ratios, self.feature_maps_dims, self.clip)
         self.softmax = nn.Softmax(dim=-1)
-        if self.phase != "test":
-            self.match_thresh = self.cfg['match_thresh']
-            self.negpos_ratio = self.cfg['negpos_ratio']
-            self.loc_loss = nn.SmoothL1Loss(reduction='sum')
-            self.conf_loss = nn.CrossEntropyLoss(reduction='none')
+        # training phase
+        self.match_thresh = self.cfg['match_thresh']
+        self.negpos_ratio = self.cfg['negpos_ratio']
+        self.loc_loss = nn.SmoothL1Loss(reduction='sum')
+        self.conf_loss = nn.CrossEntropyLoss(reduction='none')
 
     def forward(self, x, conf_thresh=None, nms_thresh=None):
         batch_size = x.shape[0]
@@ -67,24 +66,18 @@ class SSD(BaseModel):
         # loc shape: batch_size * all_feature_size * 4
         # conf shape: batch_size * all_feature_size * num_classes
         # prior_boxes shape: all_feature_size * 4
-        if self.phase == "test":
-            conf = self.softmax(conf)
-            conf_thresh = self.conf_thresh if conf_thresh is None else conf_thresh
-            nms_thresh = self.nms_thresh if nms_thresh is None else nms_thresh
-            output = generate_detections(loc, conf, self.prior_boxes, self.variance, conf_thresh, nms_thresh)
-        else:
-            output = (loc, conf, self.prior_boxes)
-        return output
+        return loc, conf, self.prior_boxes
 
-    def get_detections(self, output):
-        if isinstance(output, tuple):
-            loc, conf, prior = output
-            conf = self.softmax(conf)
-            return generate_detections(loc, conf, prior, self.variance, self.conf_thresh, self.nms_thresh)
-        else:
-            return output
+    def postprocess(self, output, conf_thresh=None, nms_thresh=None):
+        loc, conf, prior = output
+        conf = self.softmax(conf)
+        conf_thresh = self.conf_thresh if conf_thresh is None else conf_thresh
+        nms_thresh = self.nms_thresh if nms_thresh is None else nms_thresh
+        detections = generate_detections(loc, conf, prior, variance=self.variance, confidence=conf_thresh,
+                                         nms_threshold=nms_thresh)
+        return detections
 
-    def multibox_loss(self, output, target):
+    def calculate_loss(self, output, target):
         loc, conf, prior_boxes = output
         loc_t, conf_t, mask_t = transform_truths(target, prior_boxes, self.variance, self.match_thresh)
         loc = loc.view(-1, 4)
@@ -111,7 +104,7 @@ class SSD(BaseModel):
         conf_loss = pos_conf_loss.sum() + selected_neg_conf_loss.sum()
         return (loc_loss + conf_loss) / num_pos
 
-    def detection_metric(self, output, target):
+    def calculate_metric(self, output, target):
         batch_size = len(target)
         metric_avg = None
         valid_target = 0

@@ -74,9 +74,9 @@ def main(config, resume, save=True):
             # computing loss
             loss = loss_fn(output, target)
             total_loss += loss.item()
-            # try to convert output to detection results if net is a detection model
+            # try to post process output to before calculate metrics
             try:
-                output = model.get_detections(output)
+                output = model.postprocess(output)
             except:
                 pass
             # computing metrics
