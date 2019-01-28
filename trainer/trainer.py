@@ -78,7 +78,7 @@ class Trainer(BaseTrainer):
             # try to post process output to before calculate metrics
             try:
                 output = self.model.postprocess(output)
-            except:
+            except AttributeError:
                 pass
 
             total_loss += loss.item()
@@ -142,7 +142,7 @@ class Trainer(BaseTrainer):
                 # try to post process output to before calculate metrics
                 try:
                     output = self.model.postprocess(output)
-                except:
+                except AttributeError:
                     pass
 
                 total_val_loss += loss.item()

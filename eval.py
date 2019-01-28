@@ -77,7 +77,7 @@ def main(config, resume, save=True):
             # try to post process output to before calculate metrics
             try:
                 output = model.postprocess(output)
-            except:
+            except AttributeError:
                 pass
             # computing metrics
             metric_names, metrics = eval_metrics(metric_fns, output, target)

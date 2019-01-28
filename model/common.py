@@ -65,19 +65,20 @@ def generate_prior_boxes_grid(box_sizes, grid_size, clip=True):
     :param clip: whether clip output tensor in [0, 1]
     :return: tensor : grid_h * grid_w * prior_box_num * [cx, cy, w, h]
     """
-    cy, cx = torch.meshgrid([torch.arange(grid_size[0], dtype=torch.float32),
-                             torch.arange(grid_size[1], dtype=torch.float32)])
-    cy = cy.add(0.5).div(grid_size[0])
-    cx = cx.add(0.5).div(grid_size[1])
+    gh, gw = int(grid_size[0]), int(grid_size[1])
+    cy, cx = torch.meshgrid([torch.arange(gh, dtype=torch.float32),
+                             torch.arange(gw, dtype=torch.float32)])
+    cy = cy.add(0.5).div(gh)
+    cx = cx.add(0.5).div(gw)
     cy = cy.unsqueeze(2)
     cx = cx.unsqueeze(2)
     grids = []
     for box_size in box_sizes:
         box_size = torch.tensor(box_size, dtype=torch.float32)
-        box_size = box_size.repeat(grid_size[0], grid_size[1], 1)
+        box_size = box_size.repeat(gh, gw, 1)
         grid = torch.cat([cx, cy, box_size], dim=2)
         grids.append(grid)
-    grids = torch.cat(grids, dim=2).view(grid_size[0], grid_size[1], -1, 4)
+    grids = torch.cat(grids, dim=2).view(gh, gw, -1, 4)
     if clip:
         grids.clamp_(0, 1)
     return grids
@@ -154,43 +155,23 @@ def transform_truths(truths, priors, variance=None, match_thresh=0.5):
     return loc_gt, conf_gt, torch.cat(matched_masks)
 
 
-def generate_detections(loc_data, conf_data, prior_data, variance=None, confidence=0.5, nms_threshold=0.5):
+def generate_detections(loc_data, conf_data, prior_data, variance=None, confidence=0.5):
     """
     generate detections([x1, y1, x2, y2, cls, score]) from predictions
-    :param loc_data: tensor: batch_size * num_priors * [cx, cy, w, h]
-    :param conf_data: tensor: batch_size * num_priors * num_classes
+    :param loc_data: tensor: num_priors * [cx, cy, w, h]
+    :param conf_data: tensor: num_priors * num_classes
     :param prior_data: tensor: num_priors * [cx, cy, w, h]
     :param variance:
     :param confidence:
-    :param nms_threshold:
-    :return: list of tensor: batch_size * num_detection * [x1, y1, x2, y2, cls, score]
+    :return: tensor: num_detection * [x1, y1, x2, y2, cls, score]
     """
-    batch_size = loc_data.size(0)
-
-    detections = [torch.tensor([], dtype=loc_data.dtype, device=loc_data.device) for _ in range(batch_size)]
-    for i in range(batch_size):
-        # transform bbox into x1, y1, x2, y2
-        decoded_boxes = decode_boxes(loc_data[i], prior_data, variance)
-        # transform num of class scores into class index, and class score
-        cls_score, cls_index = torch.max(conf_data[i], 1)
-        cls_score = cls_score.unsqueeze(1)
-        cls_index = cls_index.unsqueeze(1).float()
-        detection = torch.cat([decoded_boxes, cls_index, cls_score], dim=1)
-        # filter by confidence
-        detection = detection[detection[:, 5] > confidence, :]
-        if detection.shape[0] == 0:
-            detections[i] = detection
-            continue
-        # get classes detected in the image
-        img_classes = torch.unique(detection[:, 4])
-        # do nms for each class
-        for cls in img_classes:
-            if cls == 0:
-                continue
-            detection_cls = detection[detection[:, 4] == cls, :]
-            detection_filtered = run_nums(detection_cls, 5, nms_threshold)
-            if detections[i].size(0) == 0:
-                detections[i] = detection_filtered
-            else:
-                detections[i] = torch.cat([detections[i], detection_filtered])
-    return detections
+    # transform bbox into x1, y1, x2, y2
+    decoded_boxes = decode_boxes(loc_data, prior_data, variance)
+    # transform num of class scores into class index, and class score
+    cls_score, cls_index = torch.max(conf_data, 1)
+    cls_score = cls_score.unsqueeze(1)
+    cls_index = cls_index.unsqueeze(1).float()
+    detection = torch.cat([decoded_boxes, cls_index, cls_score], dim=1)
+    # filter by confidence
+    detection = detection[detection[:, 5] > confidence]
+    return detection

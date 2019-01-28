@@ -51,7 +51,7 @@ def main(config, resume):
                 output = model(input)
                 try:
                     output = model.postprocess(output)
-                except:
+                except AttributeError:
                     pass
                 np_imgs, np_target = data_loader.visualize_transform(data)
             draw_img = np_imgs[0].copy()

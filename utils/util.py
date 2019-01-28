@@ -46,7 +46,7 @@ def compute_overlaps(boxes1, boxes2):
     return overlaps
 
 
-def run_nums(detections, sort_index, thresh):
+def run_nms(detections, thresh, sort_index=5):
     '''
     do non maximum suppresion
     :param detections: detections result [[x1,y1,x2,y2,...]]
@@ -64,6 +64,19 @@ def run_nums(detections, sort_index, thresh):
         detections = torch.cat((detections[:i + 1], detections[i + 1:][ious < thresh, :]))
 
     return detections
+
+
+def run_nms_cls(detections, thresh, sort_index=5):
+    if len(detections) == 0:
+        return detections
+    filtered_detections =[]
+    # get classes detected in the image
+    classes = torch.unique(detections[:, 4])
+    # do nms for each class
+    for cls in classes:
+        detection_cls = detections[detections[:, 4] == cls, :]
+        filtered_detections.append(run_nms(detection_cls, thresh, sort_index))
+    return torch.cat(filtered_detections)
 
 
 def compute_detection_metrics(pred, gt, iou_threshold=0.5):

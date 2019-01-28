@@ -56,7 +56,6 @@ class SSD(BaseModel):
                 detection_sources.append(x)
         # forward head to detection_sources
         for s, l, c in zip(detection_sources, self.loc, self.conf):
-            t = l(s)
             loc.append(l(s).permute(0, 2, 3, 1).contiguous().view(batch_size, -1, 4))
             conf.append(c(s).permute(0, 2, 3, 1).contiguous().view(batch_size, -1, self.num_classes))
         loc = torch.cat(loc, 1)
@@ -66,20 +65,24 @@ class SSD(BaseModel):
         # loc shape: batch_size * all_feature_size * 4
         # conf shape: batch_size * all_feature_size * num_classes
         # prior_boxes shape: all_feature_size * 4
-        return loc, conf, self.prior_boxes
+        return loc, conf
 
     def postprocess(self, output, conf_thresh=None, nms_thresh=None):
-        loc, conf, prior = output
+        loc, conf = output
         conf = self.softmax(conf)
         conf_thresh = self.conf_thresh if conf_thresh is None else conf_thresh
         nms_thresh = self.nms_thresh if nms_thresh is None else nms_thresh
-        detections = generate_detections(loc, conf, prior, variance=self.variance, confidence=conf_thresh,
-                                         nms_threshold=nms_thresh)
-        return detections
+        batch_detections = []
+        for i in range(len(loc)):
+            detections = generate_detections(loc[i], conf[i], self.prior_boxes, variance=self.variance, confidence=conf_thresh)
+            detections = detections[detections[:, 4] > 0] # filter background cls
+            detections = run_nms_cls(detections, nms_thresh)
+            batch_detections.append(detections)
+        return batch_detections
 
     def calculate_loss(self, output, target):
-        loc, conf, prior_boxes = output
-        loc_t, conf_t, mask_t = transform_truths(target, prior_boxes, self.variance, self.match_thresh)
+        loc, conf = output
+        loc_t, conf_t, mask_t = transform_truths(target, self.prior_boxes, self.variance, self.match_thresh)
         loc = loc.view(-1, 4)
         conf = conf.view(-1, self.num_classes)
         loc_t = loc_t.view(-1, 4)

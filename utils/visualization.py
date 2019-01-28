@@ -99,7 +99,7 @@ def draw_detections(image, detections, class_names=None, percent=False):
         # bbox
         try:
             x1, y1, x2, y2, cls_index, cls_score = detections[i]
-        except:
+        except ValueError:
             x1, y1, x2, y2, cls_index = detections[i]
             cls_score = None
         if percent:
