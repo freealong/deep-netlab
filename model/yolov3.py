@@ -5,6 +5,9 @@ import torch.nn as nn
 import numpy as np
 from utils.util import *
 
+from base import BaseModel
+from model.common import *
+
 
 def parse_cfg(cfgfile):
     """
@@ -39,12 +42,14 @@ def parse_cfg(cfgfile):
 
 def create_modules(blocks):
     net_info = blocks[0]
+    input_size = np.array([int(net_info["height"]), int(net_info["width"])])
 
     prev_filters = int(net_info['channels'])
     output_filters = []
 
     module_list = nn.ModuleList()
     index = 0
+    zoom = 1
 
     for block in blocks:
         module = nn.Sequential()
@@ -57,6 +62,7 @@ def create_modules(blocks):
             # load params from block
             kernel_size = int(block['size'])
             stride = int(block['stride'])
+            zoom *= stride
             padding = int(block['pad'])
             filters = int(block['filters'])
             activation = block['activation']
@@ -87,6 +93,7 @@ def create_modules(blocks):
 
         elif block['type'] == "upsample":
             stride = int(block['stride'])
+            zoom //= stride
             upsample = nn.Upsample(scale_factor=stride)
             module.add_module("upsample_{0}".format(index), upsample)
 
@@ -108,10 +115,10 @@ def create_modules(blocks):
         elif block['type'] == 'yolo':
             mask = [int(x) for x in block['mask'].split(',')]
             anchors = [int(x) for x in block['anchors'].split(',')]
-            anchors = [(anchors[i], anchors[i + 1]) for i in range(0, len(anchors), 2)]
+            anchors = [(anchors[i] / input_size[1], anchors[i + 1] / input_size[0]) for i in range(0, len(anchors), 2)]
             anchors = [anchors[i] for i in mask]
 
-            detection = YoloLayer(anchors)
+            detection = YoloLayer(anchors, input_size // zoom)
             module.add_module("yolo_{0}".format(index), detection)
 
         index += 1
@@ -129,10 +136,26 @@ class EmptyLayer(nn.Module):
 
 
 class YoloLayer(nn.Module):
-    def __init__(self, anchors):
+    def __init__(self, anchors, grid_size):
         super(YoloLayer, self).__init__()
-        self.anchors = anchors
-        self.num_anchors = len(self.anchors)
+        self.prior_boxes = generate_prior_boxes_grid(anchors, grid_size, True)
+        self.num_boxes = len(anchors) * grid_size[0] * grid_size[1]
+
+    def forward(self, x):
+        b = x.shape[0]
+        x = x.permute(0, 2, 3, 1).contiguous().view(b, self.num_boxes, -1)
+        # Sigmoid the  centre_X, centre_Y, object confidencce and class scores
+        x[..., 0:2] = torch.sigmoid(x[..., 0:2])
+        x[..., 4:] = torch.sigmoid(x[..., 4:])
+        return x
+
+
+class YoloV3(BaseModel):
+    def __init__(self, params_cfg):
+        super(YoloV3, self).__init__()
+        self.blocks = parse_cfg(params_cfg)
+        self.net_info, self.module_list = create_modules(self.blocks)
+        self.prior_boxes = self._cat_prior_boxes()
 
         self.ignore_threshold = 0.5
         self.lambda_cood = 5.0
@@ -141,120 +164,17 @@ class YoloLayer(nn.Module):
         self.mse_loss = nn.MSELoss(reduction='elementwise_mean')
         self.bce_loss = nn.BCELoss(reduction='elementwise_mean')
 
-    def forward(self, x, img_dim, target=None):
-        '''
-        transform yolo layer output into prediction
-        :param x: yolo layer output in B*C*H*W shape
-        :param anchors:
-        :param img_dim: network input dim: [h, w]
-        :param target: None or B*[cls, x, y, w, h]
-        :return: prediction in B*num_bbox*bbox_attrs shape
-        '''
-        # Tensors for cuda support
-        device = x.device
-        batch_size = x.shape[0]
-        stride = [img_dim[0] // x.shape[2], img_dim[1] // x.shape[3]]
-        grid_size = [img_dim[0] // stride[0], img_dim[1] // stride[1]]
-        anchors = [(a[0] / stride[1], a[1] / stride[0]) for a in self.anchors]
-        anchors = torch.tensor(anchors, device=device)
-        # bbox_attrs = len([x, y, w, h, objectness_conf) + num_classes, -1 = num_anchors * bbox_attrs
-        x = x.view(batch_size, self.num_anchors, -1, grid_size[0], grid_size[1])
-        x = x.permute(0, 1, 3, 4, 2).contiguous()  # batch_size * num_anchors * grid_height * grid_width * bbox_attrs
-        # Sigmoid the  centre_X, centre_Y, object confidencce and class scores
-        x[..., 0:2] = torch.sigmoid(x[..., 0:2])
-        x[..., 4:] = torch.sigmoid(x[..., 4:])
-        if target is not None:
-            transformed_target = self.transform_target(x, target, anchors, device)
-            losses = self.calculate_loss(x, transformed_target)
-            # add dim to loss for muti-gpu training, details see https://github.com/NVIDIA/pix2pixHD/issues/42
-            return [loss.unsqueeze(0) for loss in losses]
-        # Add center offsets
-        y_offset, x_offset = torch.meshgrid([torch.arange(grid_size[0], dtype=torch.float32, device=device),
-                                             torch.arange(grid_size[1], dtype=torch.float32, device=device)])
-        y_offset = y_offset.repeat(batch_size, self.num_anchors, 1, 1)
-        x_offset = x_offset.repeat(batch_size, self.num_anchors, 1, 1)
-        x[..., 0] += x_offset
-        x[..., 1] += y_offset
-        # log space transform height and the width
-        grid_anchors = anchors.repeat(grid_size[0], grid_size[1], 1, 1).permute(2, 0, 1, 3).contiguous()
-        x[..., 2] = torch.exp(x[..., 2]) * grid_anchors[..., 0]
-        x[..., 3] = torch.exp(x[..., 3]) * grid_anchors[..., 1]
-        # scale x, y, w, h
-        x[..., 0] *= stride[1]
-        x[..., 1] *= stride[0]
-        x[..., 2] *= stride[1]
-        x[..., 3] *= stride[0]
-        return x.view(batch_size, self.num_anchors * grid_size[0] * grid_size[1], -1)
+    def _cat_prior_boxes(self):
+        prior_boxes_list = []
+        for i, module in enumerate(self.blocks[1:]):
+            module_type = module['type']
+            if module_type == "yolo":
+                prior_boxes_list.append(self.module_list[i][0].prior_boxes)
+        return torch.cat([o.view(-1, 4) for o in prior_boxes_list])
 
-    def transform_target(self, x, target, anchors, device):
-        mask = torch.zeros(x.shape[:-1], device=device)
-        noobj_mask = torch.ones_like(mask, device=device)
-        tx = torch.zeros_like(mask, device=device)
-        ty = torch.zeros_like(mask, device=device)
-        tw = torch.zeros_like(mask, device=device)
-        th = torch.zeros_like(mask, device=device)
-        tcls_shape = list(x.shape)
-        tcls_shape[-1] -= 5
-        tcls = torch.zeros(tcls_shape, device=device)
-
-        for b in range(x.shape[0]):
-            for t in range(len(target[b])):
-                # Convert to position relative to box
-                gx = target[b][t][1] * x.shape[3]
-                gy = target[b][t][2] * x.shape[2]
-                gw = target[b][t][3] * x.shape[3]
-                gh = target[b][t][4] * x.shape[2]
-                # Get grid box indices
-                gi = int(gx)
-                gj = int(gy)
-                # Get shape of gt box
-                gt_box = torch.tensor([0, 0, gw, gh], device=device)
-                # Get shape of anchor box
-                anchor_shapes = torch.cat((torch.zeros_like(anchors, device=device), anchors), 1)
-                # Calculate iou between gt and anchor shapes
-                anchor_ious = calculate_bbox_iou(gt_box, anchor_shapes, False)
-                # Where the overlap is larger than threshold set mask to zero (ignore)
-                noobj_mask[b, anchor_ious > self.ignore_threshold, gj, gi] = 0
-                # Find the best matching anchor box
-                best_n = torch.argmax(anchor_ious)
-                # Masks
-                mask[b, best_n, gj, gi] = 1
-                # Coordinates
-                tx[b, best_n, gj, gi] = gx - gi
-                ty[b, best_n, gj, gi] = gy - gj
-                # Width and height
-                tw[b, best_n, gj, gi] = torch.log(gw / anchors[best_n][0] + 1e-16)
-                th[b, best_n, gj, gi] = torch.log(gh / anchors[best_n][1] + 1e-16)
-                # One-hot encoding of label
-                tcls[b, best_n, gj, gi, int(target[b][t][0])] = 1
-
-        return mask, noobj_mask, tx, ty, tw, th, tcls
-
-    def calculate_loss(self, x, transformed_target):
-        mask, noobj_mask, tx, ty, tw, th, tcls = transformed_target
-        x_loss = self.lambda_cood * self.bce_loss(x[..., 0] * mask, tx * mask)
-        y_loss = self.lambda_cood * self.bce_loss(x[..., 1] * mask, ty * mask)
-        w_loss = self.lambda_cood * self.mse_loss(x[..., 2] * mask, tw * mask) / 2
-        h_loss = self.lambda_cood * self.mse_loss(x[..., 3] * mask, th * mask) / 2
-        conf_loss = self.bce_loss(x[..., 4] * mask, mask) + \
-                    self.lambda_noobj * self.bce_loss(x[..., 4] * noobj_mask, noobj_mask * 0)
-        cls_loss = self.bce_loss(x[..., 5:][mask == 1], tcls[mask == 1])
-        loss = x_loss + y_loss + w_loss + h_loss + conf_loss + cls_loss
-        return loss, x_loss, y_loss, w_loss, h_loss, conf_loss, cls_loss
-
-
-class YoloNet(nn.Module):
-    def __init__(self, cfgfile):
-        super(YoloNet, self).__init__()
-        self.blocks = parse_cfg(cfgfile)
-        self.net_info, self.module_list = create_modules(self.blocks)
-
-    def forward(self, x, target=None):
-        is_training = target is not None
-        img_dim = (x.shape[2], x.shape[3])
-        outputs = {}
-        predictions = []
-        losses = []
+    def forward(self, x):
+        module_outputs = {}
+        output = []
 
         for i, module in enumerate(self.blocks[1:]):
             module_type = module['type']
@@ -264,35 +184,101 @@ class YoloNet(nn.Module):
             elif module_type == 'route':
                 layers = self.module_list[i][0].input
                 if len(layers) == 1:
-                    x = outputs[layers[0]]
+                    x = module_outputs[layers[0]]
                 else:
-                    x = torch.cat((outputs[layers[0]], outputs[layers[1]]), 1)
+                    x = torch.cat((module_outputs[layers[0]], module_outputs[layers[1]]), 1)
             elif module_type == 'shortcut':
                 layers = self.module_list[i][0].input
-                x = outputs[layers[0]] + outputs[layers[1]]
+                x = module_outputs[layers[0]] + module_outputs[layers[1]]
             elif module_type == 'yolo':
-                x = self.module_list[i][0](x, img_dim, target)
-                if is_training:
-                    if len(losses) == 0:
-                        losses = x
-                    else:
-                        losses = [a + b for a, b in zip(losses, x)]
-                else:
-                    if len(predictions) == 0:
-                        predictions = x
-                    else:
-                        predictions = torch.cat((predictions, x), 1)
-            outputs[i] = x
+                x = self.module_list[i][0](x)
+                output.append(x)
+            module_outputs[i] = x
 
-        # print([loss.item() for loss in losses])
-        return losses if is_training else predictions
+        output = torch.cat(output, 1)
+        self.prior_boxes = self.prior_boxes.to(x.device)
+        return output
 
-    def load_weights(self, weights):
-        checkpoint = torch.load(weights)
-        self.load_state_dict(checkpoint['state_dict'])
+    def postprocess(self, output, objectness_thresh=0.5, conf_thresh=0.5, nms_thresh=0.45):
+        batch_detections = []
+        for x in output:
+            mask = x[:, 4] > objectness_thresh
+            x = x[mask] # filter by objectness threshold
+            if len(x) == 0:
+                batch_detections.append(x)
+                continue
+            loc, conf = x[:, :4], x[:, 5:]
+            detections = generate_detections(loc, conf, self.prior_boxes[mask], confidence=conf_thresh)
+            detections[:, 4] += 1 # cls + 1 to map class names with background
+            detections = run_nms_cls(detections, nms_thresh)
+            batch_detections.append(detections)
+        return batch_detections
+
+    def calculate_metric(self, output, target):
+        batch_size = len(target)
+        metric_avg = None
+        valid_target = 0
+        for i in range(batch_size):
+            if len(target[i]) == 0:
+                continue
+            metric = compute_detection_metrics(output[i], target[i])
+            if metric_avg is None:
+                metric_avg = list(metric)
+            else:
+                metric_avg[1] += metric[1]
+            valid_target += 1
+        metric_avg[1] /= valid_target
+        return metric_avg
+
+    def calculate_loss(self, output, target):
+        loc, obj, conf = output[:, :, :4], output[:, :, 4], output[:, :, 5:]
+        loc_t, conf_t, best_mask, obj_mask = self._build_target(target, self.prior_boxes, self.ignore_threshold)
+        obj_t = obj_mask.to(dtype=obj.dtype)
+        noobj_mask = ~obj_mask
+        one_hot_conf_t = torch.zeros_like(conf)
+        one_hot_conf_t[best_mask, conf_t[best_mask] - 1] = 1
+        x_loss = self.lambda_cood * self.bce_loss(loc[best_mask][:, 0], loc_t[best_mask][:, 0])
+        y_loss = self.lambda_cood * self.bce_loss(loc[best_mask][:, 1], loc_t[best_mask][:, 1])
+        w_loss = self.lambda_cood * self.mse_loss(loc[best_mask][:, 2], loc_t[best_mask][:, 2])
+        h_loss = self.lambda_cood * self.mse_loss(loc[best_mask][:, 3], loc_t[best_mask][:, 3])
+        conf_loss = self.bce_loss(obj[obj_mask], obj_t[obj_mask]) +\
+                    self.bce_loss(obj[noobj_mask], obj_t[noobj_mask]) * self.lambda_noobj
+        cls_loss = self.bce_loss(conf[best_mask], one_hot_conf_t[best_mask])
+        loss = x_loss + y_loss + w_loss + h_loss + conf_loss + cls_loss
+        return loss
+
+    @staticmethod
+    def _build_target(truth, priors, match_thresh):
+        batch_size = len(truth)
+        num_priors = priors.size(0)
+        loc_gt = torch.zeros(batch_size, num_priors, 4, device=priors.device, dtype=priors.dtype, requires_grad=False)
+        conf_gt = torch.zeros(batch_size, num_priors, device=priors.device, dtype=torch.long, requires_grad=False)
+        matched_masks = torch.zeros(batch_size, num_priors, device=priors.device, dtype=torch.uint8, requires_grad=False)
+        best_matched_masks = torch.zeros(batch_size, num_priors, device=priors.device, dtype=torch.uint8, requires_grad=False)
+        for i in range(batch_size):
+            box_gt = truth[i][:, :4]
+            cls_gt = truth[i][:, 4].long()
+            overlaps = compute_overlaps(box_gt, format_bbox(priors))
+            # for each prior box select the best truth
+            best_truth_overlap, best_truth_idx = overlaps.max(dim=0)
+            # for each truth select the best prior box
+            best_prior_idx = overlaps.argmax(dim=1)
+            # for each prior box if its iou with any truth < thresh, set it's best truth id to -1
+            best_truth_idx[best_truth_overlap <= match_thresh] = -1
+            # for each prior box if its iou max than any other truth, set it's best truth id
+            best_truth_idx[best_prior_idx] = torch.arange(len(box_gt), dtype=best_truth_idx.dtype,
+                                                          device=best_truth_idx.device)
+            matched_mask = best_truth_idx > -1
+            matched_masks[i, matched_mask] = 1
+            best_matched_masks[i, best_prior_idx] = 1
+            best_matched_mask = best_matched_masks[i]
+
+            best_matched_value = best_truth_idx[best_matched_mask]
+            conf_gt[i, best_matched_mask] = cls_gt[best_matched_value]
+            loc_gt[i, best_matched_mask] = encode_boxes(box_gt[best_matched_value], priors[best_matched_mask])
+        return loc_gt, conf_gt, best_matched_masks, matched_masks
 
     def load_darknet_weights(self, weightfile, conv_num=10000):
-
         # Open the weights file
         fp = open(weightfile, "rb")
 
@@ -384,24 +370,45 @@ class YoloNet(nn.Module):
 
 
 if __name__ == "__main__":
-    # blocks = parse_cfg('cfg/yolov3-coco.cfg')
-    # print('\n\n'.join([repr(x) for x in blocks]))
-    #
-    # net_info, module_list = create_modules(blocks)
-    # print(net_info)
-    # print(module_list)
+    from PIL import Image
+    from utils.visualization import *
+    from torchvision import transforms
+    import cv2
 
-    model = YoloNet("cfg/yolov3-coco.cfg")
-    model.load_darknet_weights('darknet53.conv.74', 53)
-    # model.load_darknet_weights('yolov3.weights')
+    cfg_file = "../config/yolov3-voc.cfg"
+    img_file = "../images/dog-cycle-car.png"
+    weights_file = "../data/darknet53.conv.74"
+    # weights_file = "../data/yolov3.weights"
+    input_size = (416, 416)
+
+    model = YoloV3(cfg_file)
+    model.load_darknet_weights(weights_file, 53)
+    torch.save(model.state_dict(), weights_file + ".pth")
+
     # input size should be divisible by 32
-    input_size = [416, 608]
-    using_cuda = torch.cuda.is_available()
+    img = cv2.imread(img_file)
+    x = cv2.resize(img, input_size).astype(np.float32)
+    x -= (104., 117., 123.)
+    x = x.astype(np.float32)
+    x = x[:, :, ::-1].copy()
+    x = torch.from_numpy(x).permute(2, 0, 1)
+    input = x.unsqueeze(0)
 
-    input_tensor, input_np = load_input_image("images/dog-cycle-car.png", input_size)
-    if using_cuda:
-        input_tensor = input_tensor.cuda()
+    # target
+    target = [torch.tensor([[0.1, 0.1, 0.2, 0.2, 1], [0.2, 0.2, 0.3, 0.3, 20]])]
+
+    if torch.cuda.is_available():
+        input = input.cuda()
         model = model.cuda()
-    target_tensor = (torch.randn(1, 3, 5) + 10) / 20
-    loss = model(input_tensor)
+        target = [x.cuda() for x in target]
+    output = model(input)
+
+    # loss
+    loss = model.calculate_loss(output, target)
     print(loss)
+
+    try:
+        output = model.postprocess(output)
+    except AttributeError:
+        pass
+    print(output)

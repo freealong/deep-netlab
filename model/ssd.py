@@ -60,8 +60,7 @@ class SSD(BaseModel):
             conf.append(c(s).permute(0, 2, 3, 1).contiguous().view(batch_size, -1, self.num_classes))
         loc = torch.cat(loc, 1)
         conf = torch.cat(conf, 1)
-        if self.prior_boxes.device != x.device:
-            self.prior_boxes = self.prior_boxes.to(x.device)
+        self.prior_boxes = self.prior_boxes.to(x.device)
         # loc shape: batch_size * all_feature_size * 4
         # conf shape: batch_size * all_feature_size * num_classes
         # prior_boxes shape: all_feature_size * 4
@@ -216,7 +215,7 @@ if __name__ == "__main__":
     # weights_file = "../data/vgg16_reducedfc.pth"
 
     # prepare model
-    model = SSD('train', cfg_file)
+    model = SSD(cfg_file)
     weights = torch.load(weights_file)
     model.load_state_dict(weights)
 
@@ -238,8 +237,9 @@ if __name__ == "__main__":
 
 
     input = torch.load("../../ssd.pytorch/images.pth").cpu()[0].unsqueeze(0)
+    input = torch.rand(2, 3, 300, 300)
     target = torch.load("../../ssd.pytorch/targets.pth")[0]
-    target = [target]
+    target = [target, target]
     if torch.cuda.is_available():
         input = input.cuda()
         model = model.cuda()
@@ -247,7 +247,7 @@ if __name__ == "__main__":
     output = model.forward(input, 0.6)
     torch.save(output, "output.pth")
 
-    loss = model.multibox_loss(output, target)
+    loss = model.calculate_loss(output, target)
     loss.backward()
 
     print(output)

@@ -125,6 +125,7 @@ def decode_boxes(loc, priors, variances=None):
 def transform_truths(truths, priors, variance=None, match_thresh=0.5):
     """
     transform ground truth to loc_gt, conf_gt
+    match policy: iou > match_thresh or max iou
     :param truths: shape: batch_size * num_objects * [x1, y1, x2, y2, cls_id]
     :param priors: num_priors * [cx, cy, w, h]
     :param variance:
@@ -137,22 +138,26 @@ def transform_truths(truths, priors, variance=None, match_thresh=0.5):
     num_priors = priors.size(0)
     loc_gt = torch.zeros(batch_size, num_priors, 4, device=priors.device, dtype=priors.dtype, requires_grad=False)
     conf_gt = torch.zeros(batch_size, num_priors, device=priors.device, dtype=torch.long, requires_grad=False)
-    matched_masks = []
+    matched_masks = torch.zeros(batch_size, num_priors, device=priors.device, dtype=torch.uint8, requires_grad=False)
     for i in range(batch_size):
         box_gt = truths[i][:, :4]
         cls_gt = truths[i][:, 4].long()
         overlaps = compute_overlaps(box_gt, format_bbox(priors))
+        # for each prior box select the best truth
         best_truth_overlap, best_truth_idx = overlaps.max(dim=0)
+        # for each truth select the best prior box
         best_prior_idx = overlaps.argmax(dim=1)
+        # for each prior box if its iou with any truth < thresh, set it's best truth id to -1
         best_truth_idx[best_truth_overlap <= match_thresh] = -1
+        # for each prior box if its iou max than any other truth, set it's best truth id
         best_truth_idx[best_prior_idx] = torch.arange(len(box_gt), dtype=best_truth_idx.dtype,
                                                       device=best_truth_idx.device)
         matched_mask = best_truth_idx > -1
         matched_value = best_truth_idx[matched_mask]
         conf_gt[i, matched_mask] = cls_gt[matched_value]
         loc_gt[i, matched_mask] = encode_boxes(box_gt[matched_value], priors[matched_mask], variance)
-        matched_masks.append(matched_mask)
-    return loc_gt, conf_gt, torch.cat(matched_masks)
+        matched_masks[i, matched_mask] = 1
+    return loc_gt, conf_gt, matched_masks
 
 
 def generate_detections(loc_data, conf_data, prior_data, variance=None, confidence=0.5):
