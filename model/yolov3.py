@@ -144,9 +144,6 @@ class YoloLayer(nn.Module):
     def forward(self, x):
         b = x.shape[0]
         x = x.permute(0, 2, 3, 1).contiguous().view(b, self.num_boxes, -1)
-        # Sigmoid the  centre_X, centre_Y, object confidencce and class scores
-        x[..., 0:2] = torch.sigmoid(x[..., 0:2])
-        x[..., 4:] = torch.sigmoid(x[..., 4:])
         return x
 
 
@@ -158,11 +155,11 @@ class YoloV3(BaseModel):
         self.prior_boxes = self._cat_prior_boxes()
 
         self.ignore_threshold = 0.5
-        self.lambda_cood = 5.0
-        self.lambda_noobj = 0.5
+        self.lambda_cood = 1.0
+        self.lambda_noobj = 1.0
 
-        self.mse_loss = nn.MSELoss(reduction='elementwise_mean')
-        self.bce_loss = nn.BCELoss(reduction='elementwise_mean')
+        self.mse = nn.MSELoss()
+        self.bce_logits = nn.BCEWithLogitsLoss()
 
     def _cat_prior_boxes(self):
         prior_boxes_list = []
@@ -209,7 +206,8 @@ class YoloV3(BaseModel):
                 continue
             loc, conf = x[:, :4], x[:, 5:]
             detections = generate_detections(loc, conf, self.prior_boxes[mask], confidence=conf_thresh)
-            detections[:, 4] += 1 # cls + 1 to map class names with background
+            if len(detections) > 0:
+                detections[:, 4] += 1 # cls + 1 to map class names with background
             detections = run_nms_cls(detections, nms_thresh)
             batch_detections.append(detections)
         return batch_detections
@@ -237,13 +235,13 @@ class YoloV3(BaseModel):
         noobj_mask = ~obj_mask
         one_hot_conf_t = torch.zeros_like(conf)
         one_hot_conf_t[best_mask, conf_t[best_mask] - 1] = 1
-        x_loss = self.lambda_cood * self.bce_loss(loc[best_mask][:, 0], loc_t[best_mask][:, 0])
-        y_loss = self.lambda_cood * self.bce_loss(loc[best_mask][:, 1], loc_t[best_mask][:, 1])
-        w_loss = self.lambda_cood * self.mse_loss(loc[best_mask][:, 2], loc_t[best_mask][:, 2])
-        h_loss = self.lambda_cood * self.mse_loss(loc[best_mask][:, 3], loc_t[best_mask][:, 3])
-        conf_loss = self.bce_loss(obj[obj_mask], obj_t[obj_mask]) +\
-                    self.bce_loss(obj[noobj_mask], obj_t[noobj_mask]) * self.lambda_noobj
-        cls_loss = self.bce_loss(conf[best_mask], one_hot_conf_t[best_mask])
+        x_loss = self.lambda_cood * self.mse(loc[best_mask][:, 0], loc_t[best_mask][:, 0])
+        y_loss = self.lambda_cood * self.mse(loc[best_mask][:, 1], loc_t[best_mask][:, 1])
+        w_loss = self.lambda_cood * self.mse(loc[best_mask][:, 2], loc_t[best_mask][:, 2])
+        h_loss = self.lambda_cood * self.mse(loc[best_mask][:, 3], loc_t[best_mask][:, 3])
+        conf_loss = self.bce_logits(obj[obj_mask], obj_t[obj_mask]) +\
+                    self.bce_logits(obj[noobj_mask], obj_t[noobj_mask]) * self.lambda_noobj
+        cls_loss = self.bce_logits(conf[best_mask], one_hot_conf_t[best_mask])
         loss = x_loss + y_loss + w_loss + h_loss + conf_loss + cls_loss
         return loss
 
